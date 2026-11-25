@@ -37,7 +37,7 @@ function drawChat() {
   for (const x of ['title', 'folder', 'composer']) $(x).hidden = !chat;
   if (!chat) {
     const n = ready();
-    $('log').replaceChildren(h('div', { class: 'empty' }, h('h1', {}, 'Relaydeck'), h('p', {}, n.length ? `Ready: ${n.map((a) => a.name).join(', ')}.` : 'No agent is ready yet. Open Agents to install one or sign in.'), h('button', { class: 'primary', onclick: newChat }, 'Choose a folder to start')));
+    $('log').replaceChildren(h('div', { class: 'empty' }, h('h1', {}, 'CopyCLI'), h('p', {}, n.length ? `Ready: ${n.map((a) => a.name).join(', ')}.` : 'No agent is ready yet. Open Agents to install one or sign in.'), h('button', { class: 'primary', onclick: newChat }, 'Choose a folder to start')));
     drawApprovals();
     return;
   }
@@ -72,7 +72,7 @@ function agentCard(m, keep = new Set()) {
   for (const p of m.parts) {
     if (p.type === 'text') body.append(markdown(p.text));
     else {
-      const d = h('details', { class: 'tool', open: keep.has(p.id) }, h('summary', {}, h('span', { class: `mark ${p.status}` }, p.status === 'done' ? '✓' : p.status === 'error' ? '✕' : '…'), h('b', {}, p.name.replace(/^mcp__relaydeck__/, '')), p.detail ? h('code', {}, p.detail.split('\n')[0]) : null));
+      const d = h('details', { class: 'tool', open: keep.has(p.id) }, h('summary', {}, h('span', { class: `mark ${p.status}` }, p.status === 'done' ? '✓' : p.status === 'error' ? '✕' : '…'), h('b', {}, p.name.replace(/^mcp__copycli__/, '')), p.detail ? h('code', {}, p.detail.split('\n')[0]) : null));
       d.dataset.id = p.id;
       const full = [p.detail?.includes('\n') || p.detail?.length > 80 ? p.detail : '', p.output].filter(Boolean).join('\n\n');
       if (full) d.append(h('pre', {}, full));
@@ -149,7 +149,7 @@ async function showAgents() {
   d.replaceChildren(...[h('h2', {}, 'Agents'), h('p', {}, 'Each agent uses its own command-line app and your own sign-in. When one runs out of usage, the next one in this order continues.'),
     ...inst.map((a, i) => row(a, i, inst.length)),
     h('div', { class: 'foot' }, h('label', {}, h('input', { type: 'checkbox', checked: settings.autoHandoff, onchange: (e) => { settings.autoHandoff = e.target.checked; go('settings:set', { autoHandoff: e.target.checked }); } }), ' Hand over automatically when one runs out')),
-    inst.some((a) => a.id === 'antigravity') ? h('div', { class: 'foot' }, h('label', { title: 'Adds a "relaydeck" entry to ~/.gemini/config/mcp_config.json' }, h('input', { type: 'checkbox', checked: agy, onchange: (e) => go('agy:tools', e.target.checked) }), ' Give Antigravity the browser and team tools (edits its MCP config)')) : null,
+    inst.some((a) => a.id === 'antigravity') ? h('div', { class: 'foot' }, h('label', { title: 'Adds a "copycli" entry to ~/.gemini/config/mcp_config.json' }, h('input', { type: 'checkbox', checked: agy, onchange: (e) => go('agy:tools', e.target.checked) }), ' Give Antigravity the browser and team tools (edits its MCP config)')) : null,
     h('h3', {}, 'More agents'), ...rest.map((a) => row(a)),
     h('h3', {}, 'Add your own (any agent that speaks ACP)'), h('div', { class: 'foot' }, nm, cmd, h('button', { onclick: async () => { await call('agents:add', { name: nm.value, command: cmd.value }).catch(() => {}); } }, 'Add')),
     h('div', { class: 'foot' }, h('button', { onclick: () => go('agents:refresh') }, 'Refresh'), h('span', { class: 'grow' }), h('button', { class: 'primary', onclick: () => d.close() }, 'Done'))].filter(Boolean));

@@ -19,20 +19,20 @@ export class AcpDriver {
     });
     this.rpc = rpc;
     const timer = setTimeout(() => rpc.kill(), 60000);
-    try { this.caps = (await rpc.request('initialize', { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: 'relaydeck', title: 'Relaydeck', version: this.o.version } })).agentCapabilities || {}; }
+    try { this.caps = (await rpc.request('initialize', { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: 'copycli', title: 'CopyCLI', version: this.o.version } })).agentCapabilities || {}; }
     finally { clearTimeout(timer); }
   }
 
   servers(mcp) {
-    if (this.caps.mcpCapabilities?.http) return [{ type: 'http', name: 'relaydeck', url: mcp.url, headers: [{ name: 'Authorization', value: `Bearer ${mcp.token}` }] }];
-    return [{ name: 'relaydeck', command: mcp.bridge.command, args: mcp.bridge.args, env: Object.entries({ ...mcp.bridge.env, RELAYDECK_MCP_URL: mcp.url, RELAYDECK_MCP_TOKEN: mcp.token }).map(([name, value]) => ({ name, value })) }];
+    if (this.caps.mcpCapabilities?.http) return [{ type: 'http', name: 'copycli', url: mcp.url, headers: [{ name: 'Authorization', value: `Bearer ${mcp.token}` }] }];
+    return [{ name: 'copycli', command: mcp.bridge.command, args: mcp.bridge.args, env: Object.entries({ ...mcp.bridge.env, COPYCLI_MCP_URL: mcp.url, COPYCLI_MCP_TOKEN: mcp.token }).map(([name, value]) => ({ name, value })) }];
   }
 
   async request(method, p) {
     if (method !== 'session/request_permission') throw Object.assign(new Error('Not supported'), { code: -32601 });
     const t = this.turn, opts = p.options || [], pick = (...k) => opts.find((o) => k.includes(o.kind));
     if (!t) return { outcome: { outcome: 'cancelled' } };
-    const ours = /relaydeck/i.test(`${p.toolCall?.title || ''} ${p.toolCall?.name || ''}`) && /\b(team|browser)_/.test(`${p.toolCall?.title || ''} ${p.toolCall?.name || ''}`);
+    const ours = /copycli/i.test(`${p.toolCall?.title || ''} ${p.toolCall?.name || ''}`) && /\b(team|browser)_/.test(`${p.toolCall?.title || ''} ${p.toolCall?.name || ''}`);
     let r;
     if (t.mode === 'plan' && !ours) r = 'deny';
     else if (t.mode === 'full' || ours || (t.mode === 'edit' && p.toolCall?.kind === 'edit')) r = 'allow';

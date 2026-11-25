@@ -1,14 +1,14 @@
-# Relaydeck
+# CopyCLI
 
 One chat for all your coding agents. Claude Code, Codex, Antigravity and other agents share a conversation, a folder and a browser.
 
-> Early version, macOS only for now. "Relaydeck" is a working name.
+> Early version, macOS only for now.
 
 ## What it does
 
 - **Continue when one runs out.** If an agent hits its usage limit mid-task, the next one gets the conversation, the unfinished work and the task, and carries on. Automatic, or by hand with "Continue with…".
 - **Work together.** `@claude write the HTML @codex write the CSS @antigravity test it` gives each its own task, at the same time, in one chat. `@all` asks everyone.
-- **Know about each other.** Each agent is told what the others said and did since it last spoke. While working they can check on teammates, leave notes and claim files. Relaydeck warns when two edit the same file.
+- **Know about each other.** Each agent is told what the others said and did since it last spoke. While working they can check on teammates, leave notes and claim files. CopyCLI warns when two edit the same file.
 - **Share a browser.** A built-in browser that you see and every connected agent can drive: open, read, click, type, scroll, screenshot, console. It asks you per site, and refuses to type into password, code and card fields.
 - **Keep your approvals.** Plan only, Ask first, Edit files freely, or Full access, per chat.
 
@@ -22,15 +22,15 @@ One chat for all your coding agents. Claude Code, Codex, Antigravity and other a
 | Gemini CLI, GitHub Copilot, Cursor, OpenCode, Goose, Qwen Code, Kimi, Grok Build, Cline, Auggie, Kilo, Qoder, Kiro, Devin, Mistral Vibe, Junie, Amp | [Agent Client Protocol](https://agentclientprotocol.com) | Protocol tested with a test agent; launch commands from the ACP registry |
 | Your own | Any ACP command, added in Agents | |
 
-Relaydeck runs each vendor's own command-line app with your own sign-in. It never sees or stores your credentials, and has no server or telemetry. Your plan's limits and each vendor's terms apply.
+CopyCLI runs each vendor's own command-line app with your own sign-in. It never sees or stores your credentials, and has no server or telemetry. Your plan's limits and each vendor's terms apply.
 
 ## Install from source
 
 You need [Node.js](https://nodejs.org) 22 or later.
 
 ```bash
-git clone https://github.com/Aduhax16/relaydeck.git
-cd relaydeck
+git clone https://github.com/Aduhax16/copycli.git
+cd copycli
 npm install
 npm run install:mac
 ```

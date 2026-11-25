@@ -11,8 +11,8 @@ import { forgetEnv } from './env.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SMOKE = !app.isPackaged && process.argv.includes('--smoke');
-if (SMOKE) app.setPath('userData', fs.mkdtempSync(path.join(app.getPath('temp'), 'relaydeck-smoke-')));
-app.setName('Relaydeck');
+if (SMOKE) app.setPath('userData', fs.mkdtempSync(path.join(app.getPath('temp'), 'copycli-smoke-')));
+app.setName('CopyCLI');
 // Agents keep using the browser while the window is behind others.
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
@@ -29,8 +29,8 @@ const readAgy = () => { try { const t = fs.readFileSync(AGY_CONFIG, 'utf8'); ret
 // Opens a Terminal window running one command the user just pressed a button for.
 function inTerminal(command) {
   if (process.platform !== 'darwin') throw new Error(`Run this in a terminal: ${command}`);
-  const f = path.join(app.getPath('temp'), `relaydeck-${randomUUID()}.command`);
-  fs.writeFileSync(f, `#!/bin/zsh -il\nrm -f "$0"\necho ${q(`$ ${command}`)}\n${command}\necho\necho "Done. You can close this window and press Refresh in Relaydeck."\n`, { mode: 0o700 });
+  const f = path.join(app.getPath('temp'), `copycli-${randomUUID()}.command`);
+  fs.writeFileSync(f, `#!/bin/zsh -il\nrm -f "$0"\necho ${q(`$ ${command}`)}\n${command}\necho\necho "Done. You can close this window and press Refresh in CopyCLI."\n`, { mode: 0o700 });
   return shell.openPath(f);
 }
 const q = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
@@ -41,7 +41,7 @@ const api = {
   'chat:new': async () => { const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'], message: 'Choose the folder your agents will work in' }); return r.canceled ? null : orch.createChat({ cwd: r.filePaths[0] }); },
   'chat:update': (id, p) => orch.updateChat(id, { title: p?.title, mode: p?.mode }),
   'chat:folder': async (id) => { const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] }); return r.canceled ? null : orch.updateChat(id, { cwd: r.filePaths[0] }); },
-  'chat:delete': async (id) => { const r = await dialog.showMessageBox(win, { type: 'warning', message: 'Delete this chat?', detail: 'The chat is removed from Relaydeck. Files in the folder are not touched.', buttons: ['Delete', 'Cancel'], defaultId: 1, cancelId: 1 }); if (r.response) return false; orch.deleteChat(id); return true; },
+  'chat:delete': async (id) => { const r = await dialog.showMessageBox(win, { type: 'warning', message: 'Delete this chat?', detail: 'The chat is removed from CopyCLI. Files in the folder are not touched.', buttons: ['Delete', 'Cancel'], defaultId: 1, cancelId: 1 }); if (r.response) return false; orch.deleteChat(id); return true; },
   send: (id, text, agents) => orch.send(id, String(text), agents),
   stop: (id, agent) => orch.stop(id, agent),
   continue: (id, msg, agent) => orch.continueWith(id, msg, agent),
@@ -68,11 +68,11 @@ const api = {
   'agents:remove': (id) => { store.settings.custom = store.settings.custom.filter((c) => c.id !== id); store.saveSettings(); orch.dropDrivers(id); orch.status.delete(id); emit('agents', orch.agents()); },
   'agy:tools': async (set) => {
     const c = readAgy();
-    if (set === undefined) return !!c.mcpServers?.relaydeck;
+    if (set === undefined) return !!c.mcpServers?.copycli;
     c.mcpServers ||= {};
-    if (set) c.mcpServers.relaydeck = { command: bridge.command, args: bridge.args, env: bridge.env }; else delete c.mcpServers.relaydeck;
+    if (set) c.mcpServers.copycli = { command: bridge.command, args: bridge.args, env: bridge.env }; else delete c.mcpServers.copycli;
     fs.mkdirSync(path.dirname(AGY_CONFIG), { recursive: true });
-    if (fs.existsSync(AGY_CONFIG)) fs.copyFileSync(AGY_CONFIG, `${AGY_CONFIG}.relaydeck-backup`);
+    if (fs.existsSync(AGY_CONFIG)) fs.copyFileSync(AGY_CONFIG, `${AGY_CONFIG}.copycli-backup`);
     fs.writeFileSync(AGY_CONFIG, JSON.stringify(c, null, 2));
     return !!set;
   },
@@ -99,7 +99,7 @@ function menu() {
     { role: 'editMenu' },
     { label: 'View', submenu: [{ label: 'Toggle Browser', accelerator: 'CmdOrCtrl+B', click: () => emit('menu', 'browser') }, { label: 'Stop Agents', accelerator: 'CmdOrCtrl+.', click: () => emit('menu', 'stop') }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }, { role: 'toggleDevTools' }] },
     { role: 'windowMenu' },
-    { role: 'help', submenu: [{ label: 'Check for Updates', click: () => shell.openExternal('https://github.com/Aduhax16/relaydeck/releases') }, { label: 'Source on GitHub', click: () => shell.openExternal('https://github.com/Aduhax16/relaydeck') }] },
+    { role: 'help', submenu: [{ label: 'Check for Updates', click: () => shell.openExternal('https://github.com/Aduhax16/copycli/releases') }, { label: 'Source on GitHub', click: () => shell.openExternal('https://github.com/Aduhax16/copycli') }] },
   ]));
 }
 

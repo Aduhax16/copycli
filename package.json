@@ -1,14 +1,14 @@
 {
-  "name": "relaydeck",
-  "productName": "Relaydeck",
+  "name": "copycli",
+  "productName": "CopyCLI",
   "version": "0.1.0",
   "description": "One chat for all your coding agents: Claude Code, Codex, Antigravity and any ACP agent, sharing context, a folder and a browser.",
   "license": "MIT",
   "type": "module",
   "main": "src/main/main.js",
-  "author": "Relaydeck contributors",
-  "homepage": "https://github.com/Aduhax16/relaydeck",
-  "repository": { "type": "git", "url": "git+https://github.com/Aduhax16/relaydeck.git" },
+  "author": "CopyCLI contributors",
+  "homepage": "https://github.com/Aduhax16/copycli",
+  "repository": { "type": "git", "url": "git+https://github.com/Aduhax16/copycli.git" },
   "engines": { "node": ">=22" },
   "scripts": {
     "start": "electron .",
@@ -20,7 +20,7 @@
   },
   "devDependencies": { "electron": "^45.5.0", "electron-builder": "^26.18.0" },
   "build": {
-    "appId": "dev.relaydeck.app",
+    "appId": "dev.copycli.app",
     "files": ["src/**", "package.json"],
     "asarUnpack": ["src/main/mcp-bridge.cjs"],
     "directories": { "buildResources": "build", "output": "dist" },

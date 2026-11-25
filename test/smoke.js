@@ -1,4 +1,4 @@
-// Runs inside Electron (`npm run smoke`). With RELAYDECK_LIVE=codex it also runs that real agent.
+// Runs inside Electron (`npm run smoke`). With COPYCLI_LIVE=codex it also runs that real agent.
 import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -15,7 +15,7 @@ export async function smoke({ win, orch, browser, mcp }) {
   const errors = [];
   win.webContents.on('console-message', (e) => { if (e.level === 'error') errors.push(e.message); });
   const ui = (js) => win.webContents.executeJavaScript(js);
-  const shot = async (n) => { if (process.env.RELAYDECK_SHOTS) fs.writeFileSync(path.join(process.env.RELAYDECK_SHOTS, `${n}.png`), (await win.webContents.capturePage()).toPNG()); };
+  const shot = async (n) => { if (process.env.COPYCLI_SHOTS) fs.writeFileSync(path.join(process.env.COPYCLI_SHOTS, `${n}.png`), (await win.webContents.capturePage()).toPNG()); };
   try {
     const srv = http.createServer((q, s) => s.setHeader('content-type', 'text/html').end(PAGE.replace('MCP', mcp.port)));
     await new Promise((r) => srv.listen(0, '127.0.0.1', r));
@@ -44,13 +44,13 @@ export async function smoke({ win, orch, browser, mcp }) {
     browser.close(t.id); browser.close(b.id);
     console.log('browser: ok');
 
-    if (process.env.RELAYDECK_LIVE) {
-      const id = process.env.RELAYDECK_LIVE, dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rd-live-'));
+    if (process.env.COPYCLI_LIVE) {
+      const id = process.env.COPYCLI_LIVE, dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rd-live-'));
       const c = orch.createChat({ cwd: dir });
       c.mode = 'edit'; c.sites.push(new URL(url).host);
       await ui(`document.querySelector('.chat .open').click()`);
       await sleep(500);
-      orch.send(c.id, `Use the relaydeck browser_open tool on ${url}, find the secret word, call team_claim for word.txt, then write only that word into word.txt. Be brief.`, [id]);
+      orch.send(c.id, `Use the copycli browser_open tool on ${url}, find the secret word, call team_claim for word.txt, then write only that word into word.txt. Be brief.`, [id]);
       await until(() => !orch.live.size, 240000, 'live agent');
       const m = c.messages.find((x) => x.role === 'agent');
       console.log('live:', m.status, m.error || '', '|', m.parts.map((p) => (p.type === 'text' ? p.text : `<${p.name} ${p.status}>`)).join(' '), '| files', m.files);

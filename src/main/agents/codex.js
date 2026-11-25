@@ -34,7 +34,7 @@ export class CodexDriver {
       onExit: (e) => { if (this.rpc === rpc) { this.rpc = null; this.turn?.finish({ status: isLimitError(e.message) ? 'limit' : 'error', error: e.message }); } },
     });
     this.rpc = rpc;
-    await rpc.request('initialize', { clientInfo: { name: 'relaydeck', title: 'Relaydeck', version: this.o.version }, capabilities: null });
+    await rpc.request('initialize', { clientInfo: { name: 'copycli', title: 'CopyCLI', version: this.o.version }, capabilities: null });
     rpc.notify('initialized');
   }
 
@@ -49,12 +49,12 @@ export class CodexDriver {
       return { decision: r === 'allow' ? 'accept' : r === 'always' ? 'acceptForSession' : 'decline' };
     }
     if (method === 'mcpServer/elicitation/request') {
-      // Relaydeck's own tools ask for browser permission themselves.
-      if (p.serverName === 'relaydeck' && p.mode !== 'url') return { action: 'accept', content: {}, _meta: null };
+      // CopyCLI's own tools ask for browser permission themselves.
+      if (p.serverName === 'copycli' && p.mode !== 'url') return { action: 'accept', content: {}, _meta: null };
       const r = t && p.mode !== 'url' && !Object.keys(p.requestedSchema?.properties || {}).length ? await t.onApproval({ title: `Use ${p.serverName}`, detail: p.message }) : 'deny';
       return { action: r === 'deny' ? 'decline' : 'accept', content: r === 'deny' ? null : {}, _meta: null };
     }
-    throw Object.assign(new Error('Not supported by Relaydeck'), { code: -32601 });
+    throw Object.assign(new Error('Not supported by CopyCLI'), { code: -32601 });
   }
 
   notify(method, p) {
@@ -109,7 +109,7 @@ export class CodexDriver {
     try {
       await this.start(cwd);
       const base = { cwd, model: model || null, approvalPolicy: m.approvalPolicy, sandbox: m.sandbox, developerInstructions: instructions,
-        config: { mcp_servers: { relaydeck: { url: mcp.url, http_headers: { Authorization: `Bearer ${mcp.token}` } } } } };
+        config: { mcp_servers: { copycli: { url: mcp.url, http_headers: { Authorization: `Bearer ${mcp.token}` } } } } };
       if (!this.thread) {
         let r = null;
         if (sessionId) r = await this.rpc.request('thread/resume', { threadId: sessionId, ...base, excludeTurns: true }).catch(() => null);

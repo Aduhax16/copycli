@@ -31,7 +31,7 @@ export class Browser {
     this.ses.setPermissionRequestHandler((_w, _p, cb) => cb(false));
     this.ses.setPermissionCheckHandler(() => false);
     this.ses.on('will-download', (e) => { e.preventDefault(); this.emit('browser:notice', 'Downloads are off in this browser for now.'); });
-    // A page must never reach Relaydeck's own server.
+    // A page must never reach CopyCLI's own server.
     this.ses.webRequest.onBeforeRequest((d, cb) => cb({ cancel: this.isBlocked(d.url) }));
   }
   state() { return { active: this.active, tabs: [...this.tabs.values()].map((t) => ({ id: t.id, url: t.wc.getURL(), title: t.wc.getTitle() || 'New tab', owner: t.owner, loading: t.wc.isLoading(), back: t.wc.navigationHistory.canGoBack(), forward: t.wc.navigationHistory.canGoForward() })) }; }
@@ -131,7 +131,7 @@ export class Browser {
       await sleep(60);
       // A missing marker means the click opened another page.
       if (await this.js(t, 'globalThis.__press ? globalThis.__press.hit : true').catch(() => true)) { await sleep(120); return this.read(t); }
-      if (process.env.RELAYDECK_DEBUG) console.log('click dropped, retry', i);
+      if (process.env.COPYCLI_DEBUG) console.log('click dropped, retry', i);
       await sleep(250);
     }
     // A minimized window takes no mouse input, so press the element directly.

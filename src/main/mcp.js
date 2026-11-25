@@ -33,7 +33,7 @@ export class McpServer {
   }
   async rpc(m, who) {
     switch (m.method) {
-      case 'initialize': return { protocolVersion: m.params?.protocolVersion || '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'relaydeck', version: this.version } };
+      case 'initialize': return { protocolVersion: m.params?.protocolVersion || '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'copycli', version: this.version } };
       case 'ping': return {};
       case 'tools/list': return { tools: this.tools };
       case 'tools/call':

@@ -18,8 +18,8 @@ export class ClaudeDriver {
       const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
         '--permission-prompt-tool', 'stdio', '--permission-mode', MODES[mode] || 'manual', '--disallowedTools', 'AskUserQuestion',
         '--append-system-prompt', instructions,
-        '--mcp-config', JSON.stringify({ mcpServers: { relaydeck: { type: 'http', url: mcp.url, headers: { Authorization: `Bearer ${mcp.token}` } } } }),
-        '--allowedTools', 'mcp__relaydeck'];
+        '--mcp-config', JSON.stringify({ mcpServers: { copycli: { type: 'http', url: mcp.url, headers: { Authorization: `Bearer ${mcp.token}` } } } }),
+        '--allowedTools', 'mcp__copycli'];
       if (mode === 'full') args.push('--allow-dangerously-skip-permissions');
       if (model) args.push('--model', model);
       if (sessionId) args.push('--resume', sessionId);
@@ -27,7 +27,7 @@ export class ClaudeDriver {
       const tools = new Map();
 
       const p = spawnJsonl(this.o.path, args, {
-        cwd, env: { ...this.o.env, CLAUDE_CODE_ENTRYPOINT: 'relaydeck' },
+        cwd, env: { ...this.o.env, CLAUDE_CODE_ENTRYPOINT: 'copycli' },
         onJson: async (m) => {
           if (m.session_id && m.session_id !== sid) { sid = m.session_id; onEvent({ type: 'session', id: sid }); }
           if (m.parent_tool_use_id) return;

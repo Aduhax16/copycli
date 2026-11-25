@@ -20,7 +20,7 @@ export class AntigravityDriver {
     return new Promise((resolve) => {
       let sid = sessionId, out, sawText = false, lastStep;
       const p = spawnJsonl(this.o.path, agyArgs({ prompt: `${instructions}\n\n${prompt}`, cwd, mode, model, sessionId }), {
-        cwd, env: { ...this.o.env, RELAYDECK_MCP_URL: mcp.url, RELAYDECK_MCP_TOKEN: mcp.token },
+        cwd, env: { ...this.o.env, COPYCLI_MCP_URL: mcp.url, COPYCLI_MCP_TOKEN: mcp.token },
         onJson: (m) => {
           const id = m.conversation_id || m.step_update?.conversation_id || m.result?.conversation_id;
           if (id && id !== sid) { sid = id; onEvent({ type: 'session', id }); }
