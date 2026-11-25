@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+<title>Relaydeck</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<aside id="side">
+  <div class="drag"></div>
+  <button id="new" class="wide">New chat</button>
+  <nav id="chats" aria-label="Chats"></nav>
+  <button id="agents-btn" class="wide quiet">Agents</button>
+</aside>
+<main id="main">
+  <header id="top"><input id="title" aria-label="Chat title" spellcheck="false"><button id="folder" class="quiet" title="Change folder"></button><span class="grow"></span><button id="browser-btn" class="quiet" title="Show or hide the browser (⌘B)">Browser</button></header>
+  <section id="log" aria-live="polite"></section>
+  <section id="approvals" aria-label="Approvals"></section>
+  <form id="composer">
+    <textarea id="input" rows="1" placeholder="Message your agents. Use @claude, @codex… to give each its own task."></textarea>
+    <div id="mentions" hidden></div>
+    <div class="row"><div id="targets" role="group" aria-label="Send to"></div><span class="grow"></span>
+      <select id="mode" aria-label="Permissions"><option value="plan">Plan only</option><option value="ask">Ask first</option><option value="edit">Edit files freely</option><option value="full">Full access</option></select>
+      <button id="stop" type="button" class="quiet" hidden>Stop all</button><button id="send" class="primary">Send</button></div>
+  </form>
+</main>
+<div id="grip" role="separator" aria-label="Resize browser" hidden></div>
+<section id="web" hidden aria-label="Browser">
+  <div id="tabs"></div>
+  <div id="bar"><button data-nav="back" aria-label="Back">←</button><button data-nav="forward" aria-label="Forward">→</button><button data-nav="reload" aria-label="Reload">↻</button><input id="url" placeholder="Search or enter address" spellcheck="false"><select id="share" aria-label="Hand this tab to an agent"></select></div>
+  <div id="view"><p>Open a page here, or let an agent do it.</p></div>
+</section>
+<dialog id="agents-dlg"></dialog>
+<div id="toast" role="status" hidden></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+{
+  "name": "relaydeck",
+  "productName": "Relaydeck",
+  "version": "0.1.0",
+  "description": "One chat for all your coding agents: Claude Code, Codex, Antigravity and any ACP agent, sharing context, a folder and a browser.",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/main/main.js",
+  "author": "Relaydeck contributors",
+  "homepage": "https://github.com/Aduhax16/relaydeck",
+  "repository": { "type": "git", "url": "git+https://github.com/Aduhax16/relaydeck.git" },
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "smoke": "electron . --smoke",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --publish never",
+    "install:mac": "npm run pack && node scripts/install-mac.js"
+  },
+  "devDependencies": { "electron": "^45.5.0", "electron-builder": "^26.18.0" },
+  "build": {
+    "appId": "dev.relaydeck.app",
+    "files": ["src/**", "package.json"],
+    "asarUnpack": ["src/main/mcp-bridge.cjs"],
+    "directories": { "buildResources": "build", "output": "dist" },
+    "mac": { "target": ["dmg", "zip"], "category": "public.app-category.developer-tools", "identity": "-", "hardenedRuntime": false, "icon": "build/icon.png" }
+  }
+}
