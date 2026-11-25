@@ -2,9 +2,10 @@
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { allAgents, detect, makeDriver } from './agents/registry.js';
+import { allAgents, detect, makeDriver, probeAgent } from './agents/registry.js';
 import { parseMentions, catchUp, instructionsFor, buildPrompt, renderMessage } from './context.js';
 import { BROWSER_TOOLS, normalizeUrl } from './browser-tools.js';
+import { isContent } from './mcp.js';
 
 const S = (properties = {}, required = []) => ({ type: 'object', properties, required });
 export const TEAM_TOOLS = [
@@ -15,13 +16,16 @@ export const TEAM_TOOLS = [
   { name: 'team_release', description: 'Release files you claimed (all when left out).', inputSchema: S({ files: { type: 'array', items: { type: 'string' } } }) },
 ];
 export const TOOLS = [...TEAM_TOOLS, ...BROWSER_TOOLS];
-const READ_ONLY = new Set(['browser_open', 'browser_read', 'browser_screenshot', 'browser_scroll', 'browser_back', 'browser_console', 'browser_tabs']);
+const READ_ONLY = new Set(['browser_open', 'browser_read', 'browser_find', 'browser_screenshot', 'browser_scroll', 'browser_back', 'browser_console', 'browser_tabs']);
 
 export class Orchestrator {
-  constructor({ store, emit, version, bridge, driverFactory, detector }) {
+  constructor({ store, emit, version, bridge, driverFactory, detector, prober }) {
     Object.assign(this, { store, emit, version, bridge });
     this.makeDriver = driverFactory || ((d, i) => makeDriver(d, i, version));
     this.detect = detector || detect;
+    this.probe = prober || (detector ? async () => ({}) : (d, i) => probeAgent(d, i, version));
+    this.info = new Map();     // agentId -> { models, defaultModel }
+    this.usage = new Map();    // agentId -> [{ usedPercent, resetsAt, minutes }]
     this.status = new Map();   // agentId -> detection
     this.limited = new Map();  // agentId -> ms until
     this.drivers = new Map();  // chat/agent -> driver promise
@@ -38,13 +42,34 @@ export class Orchestrator {
   async refreshAgents() {
     await Promise.all(this.defs.map(async (d) => { const s = await this.detect(d).catch(() => ({ installed: false })); if (s.path && this.status.get(d.id)?.path !== s.path) this.dropDrivers(d.id); this.status.set(d.id, s); }));
     this.emit('agents', this.agents());
+    Promise.all(this.defs.map(async (d) => {
+      const s = this.status.get(d.id);
+      if (!s?.installed) return;
+      const p = await this.probe(d, s).catch(() => null);
+      if (!p) return;
+      if (p.models?.length) this.info.set(d.id, { models: p.models, defaultModel: p.defaultModel || null });
+      if (p.usage?.length) this.usage.set(d.id, p.usage);
+      this.emit('agents', this.agents());
+    }));
     return this.agents();
   }
+  models(id) { return this.info.get(id)?.models || this.store.settings.modelLists[id] || []; }
+  // The effort to send: the chosen one, if the chosen model has it.
+  effort(id) {
+    const e = this.store.settings.efforts[id];
+    if (!e) return '';
+    const model = this.store.settings.models[id] || this.info.get(id)?.defaultModel;
+    const m = this.models(id).find((x) => x.id === model);
+    return !m || m.efforts.includes(e) ? e : '';
+  }
+  windows(id) { return (this.usage.get(id) || []).filter((w) => !w.resetsAt || w.resetsAt * 1000 > Date.now()); }
+  // How full the fullest window is.
+  used(id) { const w = this.windows(id); return w.length ? Math.max(...w.map((x) => x.usedPercent)) : null; }
   dropDrivers(agentId) { for (const [k, d] of this.drivers) if (k.endsWith(`/${agentId}`) && !this.live.has(k)) { this.drivers.delete(k); d.then((x) => x.dispose()).catch(() => {}); } }
   agents() {
     const { order, disabled, models } = this.store.settings;
     const rank = (id) => { const i = order.indexOf(id); return i < 0 ? 99 : i; };
-    return this.defs.map((d) => ({ id: d.id, name: d.name, color: d.color, kind: d.kind, custom: !!d.custom, aliases: d.aliases || [], install: d.install || null, site: d.site || null, canLogin: !!d.login, installed: false, ...this.status.get(d.id), enabled: !disabled.includes(d.id), model: models[d.id] || '', limitedUntil: (this.limited.get(d.id) || 0) > Date.now() ? this.limited.get(d.id) : null }))
+    return this.defs.map((d) => ({ id: d.id, name: d.name, color: d.color, kind: d.kind, custom: !!d.custom, aliases: d.aliases || [], install: d.install || null, site: d.site || null, canLogin: !!d.login, installed: false, ...this.status.get(d.id), enabled: !disabled.includes(d.id), model: models[d.id] || '', effort: this.store.settings.efforts[d.id] || '', models: this.models(d.id), defaultModel: this.info.get(d.id)?.defaultModel || null, usage: this.windows(d.id), limitedUntil: (this.limited.get(d.id) || 0) > Date.now() ? this.limited.get(d.id) : null }))
       .sort((a, b) => rank(a.id) - rank(b.id));
   }
   usable() { return this.agents().filter((a) => a.installed && a.enabled && a.signedIn !== false); }
@@ -121,6 +146,9 @@ export class Orchestrator {
       st.pending = c.seen;
       return buildPrompt({ task: job.task, context: c.text, working: working(), handoff: job.from && this.name(job.from) });
     };
+    turn.startUsage = this.windows(job.id).map((w) => ({ ...w }));
+    turn.startUsed = this.used(job.id);
+    if (!job.spend && !(await this.mayStart(chat, job, turn))) return;
     const msg = this.push(chat, { role: 'agent', agentId: job.id, round: job.round, status: 'running', parts: [], files: [], task: job.task });
     turn.msg = msg;
     this.emit('chats', this.listChats());
@@ -134,29 +162,33 @@ export class Orchestrator {
         const old = msg.parts.find((p) => p.type === 'tool' && p.id === e.id);
         const { type: _t, ...f } = e;
         const set = Object.fromEntries(Object.entries(f).filter(([, v]) => v !== undefined && v !== ''));
-        if (old) Object.assign(old, set); else msg.parts.push({ type: 'tool', name: 'Tool', ...set });
+        if (old) Object.assign(old, set); else { msg.parts.push({ type: 'tool', name: 'Tool', ...set }); this.guard(turn); }
       } else if (e.type === 'files') this.filesTouched(chat, turn, e.paths);
       else if (e.type === 'session') { st.session = e.id; }
       else if (e.type === 'session-lost') { st.seen = []; }
-      else if (e.type === 'limits') { turn.limits = e.info; this.emit('limits', { agentId: job.id, ...e.info }); return; }
+      else if (e.type === 'usage') { const { type: _t, ...u } = e; msg.usage = { ...msg.usage, ...u }; }
+      else if (e.type === 'models') { this.store.settings.modelLists[job.id] = e.models; this.store.saveSettings(); this.emit('agents', this.agents()); return; }
+      else if (e.type === 'limits') { if (e.info.windows?.length) { this.usage.set(job.id, e.info.windows); this.guard(turn); this.emit('usage', { agentId: job.id, usage: this.windows(job.id) }); } return; }
       touch();
     };
     let r;
     try {
       const d = await this.driver(chat, job.id);
       r = turn.abort.signal.aborted ? { status: 'cancelled' } : await d.run({
-        prompt: prompt(), cwd: chat.cwd, mode: chat.mode, model: this.store.settings.models[job.id] || '', sessionId: st.session,
+        prompt: prompt(), cwd: chat.cwd, mode: chat.mode, model: this.store.settings.models[job.id] || '', effort: this.effort(job.id), lean: this.store.settings.leanCodex, sessionId: st.session,
         instructions: instructionsFor(def, others, chat.cwd, chat.mode), mcp: { ...this.mcpFor(chat.id, job.id), bridge: this.bridge },
         onEvent, onApproval: (a) => this.askApproval(chat, job.id, a, turn.abort.signal), signal: turn.abort.signal,
       });
     } catch (e) { r = { status: 'error', error: e.message }; }
     clearTimeout(pendingTouch);
-    if (turn.abort.signal.aborted) r.status = 'cancelled';
+    if (turn.abort.signal.aborted) r.status = turn.paused ? 'paused' : 'cancelled';
+    if (turn.paused && r.status === 'paused') r.error = turn.paused;
     if (r.sessionId) st.session = r.sessionId;
     // A turn that never ran has told the agent nothing.
     if (r.status === 'done' || msg.parts.length) st.seen = [...new Set([...st.seen, ...(st.pending || []), ...chat.messages.filter((m) => m.role === 'user' && m.round === job.round).map((m) => m.id)])];
     delete st.pending;
     msg.status = r.status;
+    msg.spent = this.spent(turn);
     msg.ended = Date.now();
     if (r.error) msg.error = String(r.error).slice(0, 2000);
     for (const p of msg.parts) if (p.status === 'running') p.status = r.status === 'done' ? 'done' : 'error';
@@ -169,6 +201,42 @@ export class Orchestrator {
     if (next && !this.live.has(k)) this.enqueue(chat, next);
     this.emit('agents', this.agents());
     this.emit('chats', this.listChats());
+  }
+
+  // ---- usage guard ----
+  // Percent of the fullest shared window used since this turn began. Windows that reset start over.
+  spent(turn) {
+    const now = this.windows(turn.agentId), was = turn.startUsage || [];
+    const d = now.map((w) => { const o = was.find((x) => x.minutes === w.minutes && Math.abs((x.resetsAt || 0) - (w.resetsAt || 0)) < 120); return o ? Math.max(0, w.usedPercent - o.usedPercent) : 0; });
+    return d.length ? Math.max(...d) : null;
+  }
+  guard(turn) {
+    const g = this.store.settings.guard;
+    if (!turn.startUsage?.length && this.windows(turn.agentId).length) turn.startUsage = this.windows(turn.agentId).map((w) => ({ ...w }));
+    if (!g.on || turn.paused || turn.abort.signal.aborted) return;
+    const n = this.name(turn.agentId), spent = this.spent(turn), used = this.used(turn.agentId);
+    const actions = turn.msg?.parts.filter((p) => p.type === 'tool').length || 0;
+    let why = '';
+    if (spent !== null && spent >= g.perTask) why = `${n} used ${spent}% of your plan's limit on this task, so it was paused.`;
+    else if (used !== null && used >= 100 - g.reserve && (turn.startUsed ?? used) < 100 - g.reserve) why = `${n} reached ${used}% of your plan's limit, so it was paused to keep the rest.`;
+    else if (spent === null && actions >= g.actions) why = `${n} has taken ${actions} actions on this task, so it was paused.`;
+    if (why) { turn.paused = why; turn.abort.abort(); }
+  }
+  async mayStart(chat, job, turn) {
+    const g = this.store.settings.guard, k = this.key(chat.id, job.id);
+    if (!g.on || turn.startUsed === null || turn.startUsed < 100 - g.reserve) return true;
+    const ok = await this.ask(chat, job.id, { title: `Keep using ${this.name(job.id)}?`, detail: `${turn.startUsed}% of your plan's limit is already used.`, note: 'Deny to leave the rest unused. Another agent can take the task if automatic handover is on.' }, turn.abort.signal);
+    if (ok !== 'deny') return true;
+    this.live.delete(k);
+    const next = this.usable().find((a) => ![...job.tried, job.id].includes(a.id) && !a.limitedUntil && !(this.used(a.id) >= 100 - g.reserve));
+    if (!turn.abort.signal.aborted && this.store.settings.autoHandoff && next) {
+      this.push(chat, { role: 'system', text: `${next.name} is taking this task to save ${this.name(job.id)}'s usage.` });
+      this.enqueue(chat, { id: next.id, task: job.task, round: job.round, tried: [...job.tried, job.id] });
+    } else this.push(chat, { role: 'system', text: `${this.name(job.id)} did not start.` });
+    this.emit('chats', this.listChats());
+    const q = this.queue.get(k)?.shift();
+    if (q) this.enqueue(chat, q);
+    return false;
   }
 
   handOff(chat, job, r) {
@@ -188,6 +256,11 @@ export class Orchestrator {
   continueWith(chatId, messageId, agentId) {
     const chat = this.chat(chatId), m = chat.messages.find((x) => x.id === messageId);
     if (!m || m.role !== 'agent' || !this.usable().some((a) => a.id === agentId)) throw new Error('That agent is not available');
+    if (agentId === m.agentId) {
+      this.push(chat, { role: 'system', text: `${this.name(agentId)} is continuing.` });
+      this.enqueue(chat, { id: agentId, task: `Continue this task from where you stopped, and finish with as few steps as you can:\n\n${m.task}`, round: randomUUID(), tried: [], spend: true });
+      return;
+    }
     this.push(chat, { role: 'system', text: `${this.name(agentId)} is continuing ${this.name(m.agentId)}'s task.` });
     this.enqueue(chat, { id: agentId, task: m.task, round: randomUUID(), from: m.status === 'limit' ? m.agentId : undefined, tried: [m.agentId] });
   }
@@ -212,6 +285,9 @@ export class Orchestrator {
   askApproval(chat, agentId, a, signal) {
     if (chat.mode === 'plan') return Promise.resolve('deny');
     if (chat.mode === 'full') return Promise.resolve('allow');
+    return this.ask(chat, agentId, a, signal);
+  }
+  ask(chat, agentId, a, signal) {
     if (signal?.aborted) return Promise.resolve('deny');
     return new Promise((resolve) => {
       const id = randomUUID();
@@ -241,7 +317,7 @@ export class Orchestrator {
     if (!notes.length || name === 'team_messages') return out;
     st.seen.push(...notes.map((n) => n.id));
     const extra = { type: 'text', text: `New notes from teammates:\n${notes.map((n) => renderMessage(n, this.name)).join('\n')}` };
-    return [...(Array.isArray(out) ? out : [{ type: 'text', text: typeof out === 'string' ? out : JSON.stringify(out) }]), extra];
+    return [...(isContent(out) ? out : [{ type: 'text', text: typeof out === 'string' ? out : JSON.stringify(out) }]), extra];
   }
   team(chat, agentId, turn, name, a) {
     const files = (Array.isArray(a.files) ? a.files : []).map((f) => this.rel(chat, String(f)));
@@ -275,8 +351,28 @@ export class Orchestrator {
   }
   askPlanSite(chat, agentId, host, turn) { return this.askApproval({ ...chat, mode: 'ask' }, agentId, { title: `Read ${host} in the browser`, detail: host, canAlways: true, alwaysLabel: 'Always on this site' }, turn.abort.signal); }
   async web(chat, agentId, turn, name, a) {
+    try { const r = await this.webOnce(chat, agentId, turn, name, a); turn.webErrors = 0; return r; }
+    catch (e) {
+      turn.webErrors = (turn.webErrors || 0) + 1;
+      if (turn.webErrors >= 3) throw new Error(`${e.message}\nThe browser has failed ${turn.webErrors} times in a row. Stop retrying and do not use another browser; tell the user what failed.`);
+      throw e;
+    }
+  }
+  async webOnce(chat, agentId, turn, name, a) {
     const b = this.browser;
     if (!b || !BROWSER_TOOLS.some((t) => t.name === name)) throw new Error(`Unknown tool ${name}`);
+    if (name === 'browser_steps') {
+      const steps = (Array.isArray(a.steps) ? a.steps : []).slice(0, 15);
+      if (!steps.length) throw new Error('Give at least one step');
+      let out, i = 0;
+      for (const { tool, ...args } of steps) {
+        i++;
+        if (turn.abort.signal.aborted) throw new Error('Stopped');
+        if (!['open', 'click', 'type', 'key', 'scroll', 'back', 'find', 'read'].includes(tool)) throw new Error(`Step ${i}: unknown tool ${tool}`);
+        try { out = await this.webOnce(chat, agentId, turn, `browser_${tool}`, args); } catch (e) { throw new Error(`Step ${i} (${tool}): ${e.message}`); }
+      }
+      return out;
+    }
     if (chat.mode === 'plan' && !READ_ONLY.has(name)) throw new Error('Plan mode: the browser can only be read.');
     const owner = `${chat.id}/${agentId}`;
     if (name === 'browser_tabs') return b.state().tabs.filter((t) => t.owner === owner).map(({ id, url, title }) => ({ id, url, title }));
@@ -292,7 +388,7 @@ export class Orchestrator {
     }
     const t = this.ownTab(b, owner, a.tab, false);
     await gate(t.wc.getURL());
-    const act = { browser_read: () => b.read(t), browser_screenshot: () => b.screenshot(t), browser_click: () => b.click(t, a), browser_type: () => b.type(t, a), browser_key: async () => { await b.press(t, a.key); return b.read(t); }, browser_scroll: () => b.scroll(t, a.direction), browser_back: async () => { b.nav(t.id, 'back'); return b.read(t); }, browser_console: () => t.logs.slice(-60).join('\n') || 'No messages.' }[name];
+    const act = { browser_read: () => b.read(t, a), browser_find: () => b.find(t, a.text), browser_screenshot: () => b.screenshot(t), browser_click: () => b.click(t, a), browser_type: () => b.type(t, a), browser_key: async () => { await b.press(t, a.key); return b.changes(t); }, browser_scroll: () => b.scroll(t, a.direction), browser_back: async () => { b.nav(t.id, 'back'); return b.read(t); }, browser_console: () => t.logs.slice(-30).join('\n') || 'No messages.' }[name];
     const out = await act();
     await gate(t.wc.getURL());
     return out;

@@ -2,6 +2,9 @@
 import http from 'node:http';
 import { randomBytes } from 'node:crypto';
 
+// Tool results that are already MCP content, rather than plain data.
+export const isContent = (r) => Array.isArray(r) && r.length > 0 && r.every((x) => x && ((x.type === 'text' && typeof x.text === 'string') || (x.type === 'image' && x.data)));
+
 export class McpServer {
   constructor({ tools, call, version }) { Object.assign(this, { tools, call, version }); this.tokens = new Map(); }
   async listen() {
@@ -39,7 +42,7 @@ export class McpServer {
       case 'tools/call':
         try {
           const r = await this.call(who, m.params?.name, m.params?.arguments || {});
-          return { content: Array.isArray(r) ? r : [{ type: 'text', text: typeof r === 'string' ? r : JSON.stringify(r, null, 1) }] };
+          return { content: isContent(r) ? r : [{ type: 'text', text: typeof r === 'string' ? r : JSON.stringify(r, null, 1) }] };
         } catch (e) { return { isError: true, content: [{ type: 'text', text: e.message }] }; }
       default: throw Object.assign(new Error('Method not found'), { code: -32601 });
     }

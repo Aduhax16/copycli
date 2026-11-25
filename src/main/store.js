@@ -9,7 +9,7 @@ export class Store {
     this.dir = path.join(dir, 'chats');
     fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     this.settingsFile = path.join(dir, 'settings.json');
-    this.settings = { autoHandoff: true, order: ['claude', 'codex', 'antigravity'], disabled: [], models: {}, custom: [], ...read(this.settingsFile, {}) };
+    this.settings = { autoHandoff: true, order: ['claude', 'codex', 'antigravity'], disabled: [], models: {}, efforts: { codex: 'low' }, modelLists: {}, custom: [], guard: { on: true, perTask: 5, reserve: 10, actions: 60 }, leanCodex: true, ...read(this.settingsFile, {}) };
     this.chats = new Map();
     this.timers = new Map();
     for (const f of fs.readdirSync(this.dir)) {

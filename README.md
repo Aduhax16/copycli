@@ -10,6 +10,8 @@ One chat for all your coding agents. Claude Code, Codex, Antigravity and other a
 - **Work together.** `@claude write the HTML @codex write the CSS @antigravity test it` gives each its own task, at the same time, in one chat. `@all` asks everyone.
 - **Know about each other.** Each agent is told what the others said and did since it last spoke. While working they can check on teammates, leave notes and claim files. CopyCLI warns when two edit the same file.
 - **Share a browser.** A built-in browser that you see and every connected agent can drive: open, read, click, type, scroll, screenshot, console. It asks you per site, and refuses to type into password, code and card fields.
+- **Choose models.** Pick each agent's model and effort under the message box or in Agents.
+- **Watch usage.** See how much of your limit is used and what each task cost. An agent is paused when one task uses too much (5% by default) or little is left, and continues only if you say so.
 - **Keep your approvals.** Plan only, Ask first, Edit files freely, or Full access, per chat.
 
 ## Agents
@@ -45,6 +47,8 @@ Then open **Agents** to install agents or sign in.
 - All agents work in the same folder. File claims are cooperative: they reduce conflicts but do not lock files. Changes made by shell commands are not tracked.
 - Web pages can carry text meant to trick agents. The browser asks per site, but read what you approve.
 - Antigravity reads MCP servers from its own config file, so its browser and team tools are off until you turn them on in Agents.
+- Codex runs without its own plugins unless you turn them on, and at low effort by default, to use less of your limit.
+- If a third-party script or style never answers, the browser loads the page without it.
 - The app is not notarized by Apple.
 
 ## How it is built

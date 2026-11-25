@@ -32,6 +32,75 @@ test('mentioning an agent that is not ready is refused, not given to someone els
   assert.throws(() => o.send(c.id, '@claude write it @gemini review it'), /Gemini CLI is not ready/);
   assert.equal(c.messages.length, 0);
 });
+import { parseAgyModels } from '../src/main/agents/probe.js';
+import { isContent } from '../src/main/mcp.js';
+const W = (p, m = 300) => ({ usedPercent: p, resetsAt: Math.round(Date.now() / 1000) + 9000, minutes: m });
+test('tool data is never mistaken for MCP content', () => { assert.ok(!isContent([{ id: 't1', url: 'u' }])); assert.ok(!isContent([])); assert.ok(isContent([{ type: 'text', text: 'x' }])); });
+test('agy model list', () => assert.deepEqual(parseAgyModels('Available models:\n  gemini-3-pro  Gemini 3 Pro\n* claude-sonnet-5-5 (default)\n').map((m) => m.id), ['gemini-3-pro', 'claude-sonnet-5-5']));
+test('a task that uses too much of the plan is paused and can continue', async () => {
+  let n = 0;
+  const { o } = setup({ codex: ({ onEvent, signal, prompt }) => new Promise((r) => {
+    signal.addEventListener('abort', () => r({ status: 'cancelled', sessionId: 's' }));
+    if (n++) { assert.match(prompt, /Continue this task/); return r({ status: 'done' }); }
+    for (const p of [11, 13, 16]) onEvent({ type: 'limits', info: { windows: [W(p)] } });
+  }) });
+  await o.refreshAgents();
+  o.usage.set('codex', [W(10)]);
+  const c = o.createChat({ cwd: tmp() });
+  o.send(c.id, 'go', ['codex']);
+  await done(o);
+  const m = c.messages.find((x) => x.role === 'agent');
+  assert.equal(m.status, 'paused'); assert.match(m.error, /used 6%/);
+  o.continueWith(c.id, m.id, 'codex');
+  await done(o);
+  assert.equal(c.messages.at(-1).status, 'done');
+});
+test('a reset window does not count as usage, and endless actions pause', async () => {
+  const { o } = setup({ claude: ({ onEvent, signal }) => new Promise((r) => { signal.addEventListener('abort', () => r({ status: 'cancelled' })); for (let i = 0; i < 90 && !signal.aborted; i++) onEvent({ type: 'tool', id: `t${i}`, name: 'Bash', status: 'done' }); }), codex: async ({ onEvent }) => { onEvent({ type: 'limits', info: { windows: [{ usedPercent: 30, resetsAt: Date.now() / 1000 + 90000, minutes: 300 }] } }); return { status: 'done' }; } });
+  await o.refreshAgents();
+  o.usage.set('codex', [W(10)]);
+  const c = o.createChat({ cwd: tmp() });
+  o.send(c.id, 'go', ['claude', 'codex']);
+  await done(o);
+  const by = (id) => c.messages.find((x) => x.agentId === id);
+  assert.equal(by('codex').status, 'done');
+  assert.match(by('claude').error, /60 actions/);
+});
+test('near the end of the plan it asks first, even with full access', async () => {
+  let ran = [];
+  const { o, events } = setup({ codex: async () => { ran.push('codex'); return { status: 'done' }; }, claude: async () => { ran.push('claude'); return { status: 'done' }; } });
+  await o.refreshAgents();
+  o.usage.set('codex', [W(95)]);
+  const c = o.createChat({ cwd: tmp() });
+  o.updateChat(c.id, { mode: 'full' });
+  o.send(c.id, 'go', ['codex']);
+  const ev = await until(() => events.find(([e]) => e === 'approval'));
+  o.resolveApproval(ev[1].id, 'deny');
+  await until(() => ran.length);
+  await done(o);
+  assert.deepEqual(ran, ['claude']);
+});
+test('the chosen model and an effort it supports are sent', async () => {
+  const got = [];
+  const { o, store } = setup({ codex: async (x) => { got.push([x.model, x.effort]); return { status: 'done' }; } }, { prober: async (d) => (d.id === 'codex' ? { models: [{ id: 'a', name: 'A', efforts: ['low', 'high'] }, { id: 'b', name: 'B', efforts: ['high'] }], defaultModel: 'a' } : {}) });
+  await o.refreshAgents();
+  await until(() => o.models('codex').length);
+  const c = o.createChat({ cwd: tmp() });
+  for (const m of ['', 'b', 'a']) { store.settings.models.codex = m; o.send(c.id, 'go', ['codex']); await done(o); }
+  assert.deepEqual(got, [['', 'low'], ['b', ''], ['a', 'low']]);
+});
+test('three browser failures in a row tell the agent to stop', async () => {
+  const go = {};
+  const { o } = setup({ claude: () => new Promise((r) => { go.r = r; }) });
+  o.browser = { tabs: new Map(), agentTab: new Map(), state: () => ({ tabs: [] }), tabFor() { throw new Error('nope'); } };
+  await o.refreshAgents();
+  const c = o.createChat({ cwd: tmp() });
+  o.send(c.id, 'x', ['claude']);
+  await until(() => go.r);
+  const t = () => o.callTool({ chatId: c.id, agentId: 'claude' }, 'browser_steps', { steps: [{ tool: 'read' }] });
+  await assert.rejects(t(), /Step 1/); await assert.rejects(t()); await assert.rejects(t(), /Stop retrying/);
+  go.r({ status: 'done' }); await done(o);
+});
 test('limit errors', () => {
   for (const s of ["You've hit your limit · resets 3pm", 'Claude usage limit reached', 'You have reached your usage limit', 'usageLimitExceeded', 'Error 429: RESOURCE_EXHAUSTED', "You've hit your weekly limit"]) assert.ok(isLimitError(s), s);
   for (const s of ['file not found', 'the rate limit code is in limits.js', 'Added line 429 to the table', 'context window exceeded']) assert.ok(!isLimitError(s), s);

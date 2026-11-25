@@ -10,7 +10,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const until = async (f, ms, what) => { const t = Date.now(); for (;;) { if (await f()) return; if (Date.now() - t > ms) throw new Error(`timed out: ${what}`); await sleep(100); } };
 const PAGE = `<title>Test page</title><h1>Secret word: pineapple</h1><input id=n aria-label="Your name"><input type=password aria-label=Pass><button onclick="document.getElementById('o').textContent='Hello '+document.getElementById('n').value">Greet</button><p id=o></p><a href="http://127.0.0.1:MCP/mcp">mcp</a><script>console.log('page log')</script>`;
 
-export async function smoke({ win, orch, browser, mcp }) {
+export async function smoke({ win, orch, browser, mcp, store }) {
   let code = 0;
   const errors = [];
   win.webContents.on('console-message', (e) => { if (e.level === 'error') errors.push(e.message); });
@@ -37,6 +37,26 @@ export async function smoke({ win, orch, browser, mcp }) {
     assert.ok(t.logs.some((l) => l.includes('page log')));
     await assert.rejects(browser.open(t, mcp.url), /blocked/);
     await assert.rejects(browser.open(t, 'file:///etc/hosts'), /Only http/);
+    // Same-page actions report only what changed; smooth scrolling and covered elements still get clicked.
+    const L = http.createServer((q, s) => { if (q.url === '/two') return s.setHeader('content-type', 'text/html').end('<title>Two</title><p>Second page'); s.setHeader('content-type', 'text/html').end(`<style>:root{scroll-behavior:smooth}</style><title>Long</title><p>top words ${'x '.repeat(50)}</p><div style="height:4000px"></div><div style="position:relative"><a href="/two">Taller TNUI</a><div style="position:absolute;inset:0"></div></div>`); });
+    await new Promise((r) => L.listen(0, '127.0.0.1', r));
+    await browser.open(t, `http://127.0.0.1:${L.address().port}/`);
+    assert.match(await browser.find(t, 'tnui'), /\[e\d+\] a "Taller TNUI"/);
+    assert.ok(!(await browser.scroll(t, 'down')).includes('top words'));
+    assert.match(await browser.click(t, { text: 'taller tnui' }), /Second page/);
+    const size = Buffer.from((await browser.screenshot(t))[0].data, 'base64');
+    assert.ok(size.length < 400000);
+    // A page whose third-party script never answers is readable, not an error.
+    const hang = http.createServer(() => {});
+    await new Promise((r) => hang.listen(0, '127.0.0.1', r));
+    const H = http.createServer((q, s) => s.setHeader('content-type', 'text/html').end(`<title>Slow</title><script src="http://localhost:${hang.address().port}/x.js"></script><p>exam on friday</p>`));
+    await new Promise((r) => H.listen(0, '127.0.0.1', r));
+    const t0 = Date.now();
+    let slow = await browser.open(t, `http://127.0.0.1:${H.address().port}/`);
+    assert.match(slow, /exam on friday/);
+    console.log(`stalled script: readable in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    for (const x of [L, hang, H]) { x.close(); x.closeAllConnections(); }
+    if (process.env.COPYCLI_SITE) { const t1 = Date.now(); const r = await browser.open(t, process.env.COPYCLI_SITE); console.log('site:', ((Date.now() - t1) / 1000).toFixed(1) + 's', r.length, 'chars', r.slice(0, 300).replace(/\n/g, ' | ')); }
     // A tab behind the app still works.
     const b = browser.create('c/b', { front: false });
     assert.match(await browser.open(b, url), /pineapple/);
@@ -50,10 +70,14 @@ export async function smoke({ win, orch, browser, mcp }) {
       c.mode = 'edit'; c.sites.push(new URL(url).host);
       await ui(`document.querySelector('.chat .open').click()`);
       await sleep(500);
+      if (process.env.COPYCLI_MODEL) store.settings.models[id] = process.env.COPYCLI_MODEL;
+      await until(() => orch.models(id).length, 20000, 'models');
+      console.log('models:', orch.models(id).map((m) => m.id).join(', '), '| limits', JSON.stringify(orch.windows(id).map((w) => w.usedPercent)));
       orch.send(c.id, `Use the copycli browser_open tool on ${url}, find the secret word, call team_claim for word.txt, then write only that word into word.txt. Be brief.`, [id]);
       await until(() => !orch.live.size, 240000, 'live agent');
       const m = c.messages.find((x) => x.role === 'agent');
       console.log('live:', m.status, m.error || '', '|', m.parts.map((p) => (p.type === 'text' ? p.text : `<${p.name} ${p.status}>`)).join(' '), '| files', m.files);
+      console.log('usage:', JSON.stringify(m.usage), 'spent', m.spent);
       assert.equal(m.status, 'done');
       assert.equal(fs.readFileSync(path.join(dir, 'word.txt'), 'utf8').trim(), 'pineapple');
       orch.send(c.id, 'In one word: what did you write in the file?', [id]);

@@ -64,7 +64,10 @@ function place(m) {
 }
 const userCard = (m) => h('div', { class: 'user' }, h('div', { class: 'to' }, `To ${m.targets.map((t) => agent(t).name).join(', ')}`), h('div', { class: 'bubble' }, m.text));
 const sysCard = (m) => h('div', { class: `sys ${m.level || ''}` }, m.text);
-const STATE = { running: 'Working', limit: 'Out of usage', error: 'Stopped', cancelled: 'Stopped by you' };
+const tok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n || 0));
+const spend = (m) => { const u = m.usage; const bits = []; if (u) bits.push(`${tok((u.fresh || 0) + (u.output || 0))} tokens`, u.cached ? `${tok(u.cached)} cached` : '', u.calls ? `${u.calls} calls` : ''); if (m.spent) bits.push(`${m.spent}% of limit`); return bits.filter(Boolean).join(' · '); };
+const span = (min) => (min >= 10080 ? 'week' : min >= 60 ? `${Math.round(min / 60)} h` : `${min} min`);
+const STATE = { running: 'Working', paused: 'Paused', limit: 'Out of usage', error: 'Stopped', cancelled: 'Stopped by you' };
 function agentCard(m, keep = new Set()) {
   const a = agent(m.agentId), live = m.status === 'running';
   const others = ready().filter((x) => x.id !== m.agentId);
@@ -83,15 +86,26 @@ function agentCard(m, keep = new Set()) {
   if (m.error) body.append(h('p', { class: `err ${m.status}` }, m.error));
   const more = h('select', { 'aria-label': 'Continue with another agent', onchange: (e) => { if (e.target.value) go('continue', chat.id, m.id, e.target.value); e.target.value = ''; } }, h('option', { value: '' }, 'Continue with…'), others.map((o) => h('option', { value: o.id }, o.name)));
   return h('article', { class: `agent${m.note ? ' note' : ''}` },
-    h('header', {}, dot(m.agentId, live), a.name, h('span', { class: `state ${m.status}` }, m.note ? 'Note to the team' : STATE[m.status] || ''), h('span', { class: 'grow' }), live ? h('button', { class: 'quiet', onclick: () => go('stop', chat.id, m.agentId) }, 'Stop') : !m.note && others.length && m.status !== 'done' ? more : null),
-    body, m.files?.length ? h('div', { class: 'files' }, `Changed ${m.files.join(', ')}`) : null);
+    h('header', {}, dot(m.agentId, live), a.name, h('span', { class: `state ${m.status}` }, m.note ? 'Note to the team' : STATE[m.status] || ''), h('span', { class: 'grow' }), live ? h('button', { class: 'quiet', onclick: () => go('stop', chat.id, m.agentId) }, 'Stop') : null, m.status === 'paused' ? h('button', { onclick: () => go('continue', chat.id, m.id, m.agentId) }, 'Continue') : null, live ? null : !m.note && others.length && m.status !== 'done' ? more : null),
+    body, m.files?.length ? h('div', { class: 'files' }, `Changed ${m.files.join(', ')}`) : null, spend(m) ? h('div', { class: 'files spend' }, spend(m)) : null);
 }
 
 // ---- composer ----
 function drawTargets() {
   const r = ready();
   if (![...picked].some((id) => r.some((a) => a.id === id)) && r[0]) picked = new Set([r[0].id]);
-  $('targets').replaceChildren(...r.map((a) => h('button', { type: 'button', class: 'chip', c: a.color, 'aria-pressed': String(picked.has(a.id)), onclick: () => { picked.has(a.id) ? picked.delete(a.id) : picked.add(a.id); localStorage.picked = JSON.stringify([...picked]); drawTargets(); } }, dot(a.id), a.name, a.limitedUntil ? h('span', { class: 'lim' }, 'limit') : null)), ...(r.length ? [] : [h('button', { type: 'button', onclick: showAgents }, 'Set up an agent')]));
+  $('targets').replaceChildren(...r.map((a) => h('button', { type: 'button', class: 'chip', c: a.color, 'aria-pressed': String(picked.has(a.id)), onclick: () => { picked.has(a.id) ? picked.delete(a.id) : picked.add(a.id); localStorage.picked = JSON.stringify([...picked]); drawTargets(); } }, dot(a.id), a.name, a.limitedUntil ? h('span', { class: 'lim' }, 'limit') : a.usage.length ? h('span', { class: Math.max(...a.usage.map((u) => u.usedPercent)) >= 80 ? 'lim' : 'pct', title: usageText(a) }, `${Math.max(...a.usage.map((u) => u.usedPercent))}%`) : null)), ...(r.length ? [] : [h('button', { type: 'button', onclick: showAgents }, 'Set up an agent')]));
+  $('models').replaceChildren(...r.filter((a) => picked.has(a.id) && a.models.length).map((a) => h('span', { class: 'mset' }, r.filter((x) => picked.has(x.id)).length > 1 ? h('span', { class: 'dim' }, a.name) : null, ...pickers(a))));
+}
+const usageText = (a) => a.usage.map((u) => `${u.usedPercent}% of the ${span(u.minutes)} limit${u.resetsAt ? `, resets ${new Date(u.resetsAt * 1000).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}`).join(' · ');
+// Model and effort menus for one agent, used under the message box and in Agents.
+function pickers(a) {
+  const def = a.models.find((m) => m.id === a.defaultModel)?.name || a.defaultModel;
+  const known = !a.model || a.models.some((m) => m.id === a.model);
+  const cur = a.models.find((m) => m.id === (a.model || a.defaultModel));
+  const efforts = cur?.efforts || [];
+  return [h('select', { 'aria-label': `${a.name} model`, title: cur?.desc || '', onchange: (e) => go('agents:set', a.id, { model: e.target.value }) }, h('option', { value: '', selected: !a.model }, def ? `Default (${def})` : 'Default model'), known ? null : h('option', { value: a.model, selected: true }, a.model), a.models.map((m) => h('option', { value: m.id, selected: m.id === a.model, title: m.desc || '' }, m.name))),
+    efforts.length ? h('select', { 'aria-label': `${a.name} effort`, title: 'Less effort uses less of your limit', onchange: (e) => go('agents:set', a.id, { effort: e.target.value }) }, h('option', { value: '', selected: !a.effort }, 'Default effort'), efforts.map((x) => h('option', { value: x, selected: x === a.effort }, `${x[0].toUpperCase()}${x.slice(1)} effort`))) : null].filter(Boolean);
 }
 const fit = () => { const i = $('input'); i.style.height = 'auto'; i.style.height = `${i.scrollHeight}px`; };
 async function send() {
@@ -135,11 +149,13 @@ function drawApprovals() {
 }
 
 // ---- agents ----
+const setGuard = async (g) => { settings = await call('settings:set', { guard: g }).catch(() => settings); };
+const num = (k, min, max, label) => h('label', {}, h('input', { type: 'number', min, max, value: settings.guard[k], onchange: async (e) => { await setGuard({ [k]: Number(e.target.value) }); e.target.value = settings.guard[k]; } }), ` ${label}`);
 async function showAgents() {
   const d = $('agents-dlg'), agy = await window.deck.call('agy:tools').catch(() => false);
-  const row = (a, i, n) => h('div', { class: 'a' }, h('span', { class: 'dot', c: a.color }), h('div', { class: 'nm' }, a.name, h('div', { class: 's' }, !a.installed ? 'Not installed' : a.signedIn === false ? 'Not signed in' : a.limitedUntil ? `Out of usage until ${new Date(a.limitedUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : a.signedIn ? 'Ready' : 'Installed')),
+  const row = (a, i, n) => h('div', { class: 'a' }, h('span', { class: 'dot', c: a.color }), h('div', { class: 'nm' }, a.name, h('div', { class: 's' }, !a.installed ? 'Not installed' : a.signedIn === false ? 'Not signed in' : a.limitedUntil ? `Out of usage until ${new Date(a.limitedUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : a.usage.length ? usageText(a) : a.signedIn ? 'Ready' : 'Installed')),
     !a.installed ? (a.install || a.site ? h('button', { title: a.install || a.site, onclick: () => go('agents:install', a.id) }, a.install ? 'Install' : 'Get it') : null) : [
-      h('input', { type: 'text', placeholder: 'Default model', value: a.model, 'aria-label': `${a.name} model`, onchange: (e) => go('agents:set', a.id, { model: e.target.value }) , hidden: a.kind === 'acp' }),
+      ...(a.models.length ? pickers(a) : a.kind === 'acp' ? [h('span', { class: 's' }, 'Models appear after first use')] : [h('input', { type: 'text', placeholder: 'Default model', value: a.model, 'aria-label': `${a.name} model`, onchange: (e) => go('agents:set', a.id, { model: e.target.value }) })]),
       a.canLogin ? h('button', { onclick: () => go('agents:login', a.id) }, 'Sign in') : null,
       h('label', {}, h('input', { type: 'checkbox', checked: a.enabled, onchange: (e) => go('agents:set', a.id, { enabled: e.target.checked }) }), ' On')],
     a.custom ? h('button', { class: 'quiet', onclick: () => go('agents:remove', a.id) }, 'Remove') : null,
@@ -150,6 +166,10 @@ async function showAgents() {
     ...inst.map((a, i) => row(a, i, inst.length)),
     h('div', { class: 'foot' }, h('label', {}, h('input', { type: 'checkbox', checked: settings.autoHandoff, onchange: (e) => { settings.autoHandoff = e.target.checked; go('settings:set', { autoHandoff: e.target.checked }); } }), ' Hand over automatically when one runs out')),
     inst.some((a) => a.id === 'antigravity') ? h('div', { class: 'foot' }, h('label', { title: 'Adds a "copycli" entry to ~/.gemini/config/mcp_config.json' }, h('input', { type: 'checkbox', checked: agy, onchange: (e) => go('agy:tools', e.target.checked) }), ' Give Antigravity the browser and team tools (edits its MCP config)')) : null,
+    h('h3', {}, 'Saving usage'),
+    h('div', { class: 'foot' }, h('label', {}, h('input', { type: 'checkbox', checked: settings.guard.on, onchange: (e) => setGuard({ on: e.target.checked }) }), ' Pause an agent when it'), ),
+    h('div', { class: 'foot indent' }, 'uses', num('perTask', 1, 100, '% of your limit on one task'), 'or leaves less than', num('reserve', 0, 90, '% of it.'), 'If its limit is unknown, after', num('actions', 5, 500, 'actions.')),
+    h('div', { class: 'foot' }, h('label', { title: 'Codex sends its plugins with every call. CopyCLI has its own browser, so they are usually wasted.' }, h('input', { type: 'checkbox', checked: settings.leanCodex, onchange: (e) => { settings.leanCodex = e.target.checked; go('settings:set', { leanCodex: e.target.checked }); } }), ' Run Codex without its own plugins (uses less, and keeps it off your desktop)')),
     h('h3', {}, 'More agents'), ...rest.map((a) => row(a)),
     h('h3', {}, 'Add your own (any agent that speaks ACP)'), h('div', { class: 'foot' }, nm, cmd, h('button', { onclick: async () => { await call('agents:add', { name: nm.value, command: cmd.value }).catch(() => {}); } }, 'Add')),
     h('div', { class: 'foot' }, h('button', { onclick: () => go('agents:refresh') }, 'Refresh'), h('span', { class: 'grow' }), h('button', { class: 'primary', onclick: () => d.close() }, 'Done'))].filter(Boolean));
@@ -200,6 +220,7 @@ window.deck.on((ch, d) => {
     place(d.message);
     if (atEnd || d.message.role === 'user') log.scrollTop = 1e9;
   }
+  if (ch === 'usage') { const a = agents.find((x) => x.id === d.agentId); if (a) { a.usage = d.usage; if (chat) drawTargets(); } }
   if (ch === 'approval') { approvals.push(d); drawApprovals(); if (d.chatId !== chat?.id) toast(`${agent(d.agentId).name} needs your approval in another chat`); }
   if (ch === 'approval-done') { approvals = approvals.filter((a) => a.id !== d.id); drawApprovals(); }
   if (ch === 'browser:state') { tabs = d; drawWeb(); }

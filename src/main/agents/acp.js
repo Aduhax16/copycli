@@ -61,7 +61,21 @@ export class AcpDriver {
     }
   }
 
-  async run({ prompt, cwd, mode, sessionId, instructions, mcp, onEvent, onApproval, signal }) {
+  // Agents that let the client choose a model list it with the session.
+  models(r) {
+    const o = (r?.configOptions || []).find((x) => x.category === 'model' && x.type === 'select');
+    if (o) { this.modelOpt = o.id; return (o.options || []).flatMap((x) => x.options || [x]).map((x) => ({ id: x.value, name: x.name, desc: x.description, efforts: [] })); }
+    this.modelOpt = null;
+    return (r?.models?.availableModels || []).map((x) => ({ id: x.modelId, name: x.name, desc: x.description, efforts: [] }));
+  }
+  async setModel(model) {
+    if (!model || model === this.model) return;
+    if (this.modelOpt) await this.rpc.request('session/set_config_option', { sessionId: this.session, configId: this.modelOpt, value: model });
+    else await this.rpc.request('session/set_model', { sessionId: this.session, modelId: model });
+    this.model = model;
+  }
+
+  async run({ prompt, cwd, mode, model, sessionId, instructions, mcp, onEvent, onApproval, signal }) {
     this.turn = { onEvent, onApproval, mode, signal, kinds: new Map() };
     const stop = () => { if (this.session) this.rpc?.notify('session/cancel', { sessionId: this.session }); setTimeout(() => { if (this.turn?.signal === signal) this.dispose(); }, 4000).unref(); };
     signal.addEventListener('abort', stop);
@@ -72,13 +86,14 @@ export class AcpDriver {
         const base = { cwd, mcpServers: this.servers(mcp) };
         if (sessionId && this.caps.loadSession) {
           this.turn.loading = true;
-          try { await this.rpc.request('session/load', { sessionId, ...base }); this.session = sessionId; } catch {}
+          try { const r = await this.rpc.request('session/load', { sessionId, ...base }); this.session = sessionId; const ms = this.models(r); if (ms.length) onEvent({ type: 'models', models: ms }); } catch {}
           this.turn.loading = false;
         }
-        if (!this.session) { this.session = (await this.rpc.request('session/new', base)).sessionId; fresh = true; if (sessionId) onEvent({ type: 'session-lost' }); }
+        if (!this.session) { const r = await this.rpc.request('session/new', base); this.session = r.sessionId; this.model = null; const ms = this.models(r); if (ms.length) onEvent({ type: 'models', models: ms }); fresh = true; if (sessionId) onEvent({ type: 'session-lost' }); }
         onEvent({ type: 'session', id: this.session });
       }
       if (signal.aborted) return { status: 'cancelled', sessionId: this.session };
+      await this.setModel(model).catch((e) => onEvent({ type: 'text', delta: `_Could not switch to ${model}: ${e.message}_\n\n` }));
       const r = await this.rpc.request('session/prompt', { sessionId: this.session, prompt: [{ type: 'text', text: fresh || !sessionId ? `${instructions}\n\n${prompt}` : prompt }] });
       if (r?.stopReason === 'cancelled') return { status: 'cancelled', sessionId: this.session };
       return { status: r?.stopReason === 'refusal' ? 'error' : 'done', error: r?.stopReason === 'refusal' ? 'The agent declined this request.' : undefined, sessionId: this.session };

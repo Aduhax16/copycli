@@ -51,6 +51,7 @@ const api = {
     const s = store.settings;
     if (typeof p.enabled === 'boolean') s.disabled = p.enabled ? s.disabled.filter((x) => x !== id) : [...new Set([...s.disabled, id])];
     if (typeof p.model === 'string') { if (p.model.trim() && !p.model.trim().startsWith('-')) s.models[id] = p.model.trim(); else delete s.models[id]; }
+    if (typeof p.effort === 'string') { if (/^[a-z]*$/.test(p.effort)) s.efforts[id] = p.effort; }
     if (p.move) { const o = orch.agents().map((a) => a.id), i = o.indexOf(id), j = i + (p.move < 0 ? -1 : 1); if (o[j]) { [o[i], o[j]] = [o[j], o[i]]; s.order = o; } }
     store.saveSettings();
     emit('agents', orch.agents());
@@ -76,7 +77,16 @@ const api = {
     fs.writeFileSync(AGY_CONFIG, JSON.stringify(c, null, 2));
     return !!set;
   },
-  'settings:set': (p) => { if (typeof p.autoHandoff === 'boolean') store.settings.autoHandoff = p.autoHandoff; store.saveSettings(); },
+  'settings:set': (p) => {
+    const s = store.settings;
+    if (typeof p.autoHandoff === 'boolean') s.autoHandoff = p.autoHandoff;
+    if (typeof p.leanCodex === 'boolean') { s.leanCodex = p.leanCodex; orch.dropDrivers('codex'); }
+    const g = p.guard || {};
+    if (typeof g.on === 'boolean') s.guard.on = g.on;
+    for (const [k, lo, hi] of [['perTask', 1, 100], ['reserve', 0, 90], ['actions', 5, 500]]) if (Number.isFinite(g[k])) s.guard[k] = Math.min(hi, Math.max(lo, Math.round(g[k])));
+    store.saveSettings();
+    return s;
+  },
   'browser:new': () => { const t = browser.create(null); return t.id; },
   'browser:go': (id, u) => browser.go(id, u),
   'browser:nav': (id, w) => browser.nav(id, w),

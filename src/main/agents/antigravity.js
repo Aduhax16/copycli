@@ -4,22 +4,23 @@ import path from 'node:path';
 import { spawnJsonl } from './proc.js';
 import { isLimitError } from '../limits.js';
 
-export function agyArgs({ prompt, cwd, mode, model, sessionId }) {
+export function agyArgs({ prompt, cwd, mode, model, effort, sessionId }) {
   const a = ['-p', prompt, '--output-format', 'stream-json', '--add-dir', cwd];
   if (mode === 'plan') a.push('--mode', 'plan');
   else if (mode === 'edit') a.push('--mode', 'accept-edits');
   else if (mode === 'full') a.push('--dangerously-skip-permissions');
   if (model) a.push('--model', model);
+  if (effort) a.push('--effort', effort);
   if (sessionId) a.push('--conversation', sessionId);
   return a;
 }
 
 export class AntigravityDriver {
   constructor(opts) { this.o = opts; }
-  run({ prompt, cwd, mode, model, sessionId, instructions, mcp, onEvent, signal }) {
+  run({ prompt, cwd, mode, model, effort, sessionId, instructions, mcp, onEvent, signal }) {
     return new Promise((resolve) => {
       let sid = sessionId, out, sawText = false, lastStep;
-      const p = spawnJsonl(this.o.path, agyArgs({ prompt: `${instructions}\n\n${prompt}`, cwd, mode, model, sessionId }), {
+      const p = spawnJsonl(this.o.path, agyArgs({ prompt: `${instructions}\n\n${prompt}`, cwd, mode, model, effort, sessionId }), {
         cwd, env: { ...this.o.env, COPYCLI_MCP_URL: mcp.url, COPYCLI_MCP_TOKEN: mcp.token },
         onJson: (m) => {
           const id = m.conversation_id || m.step_update?.conversation_id || m.result?.conversation_id;
@@ -40,6 +41,7 @@ export class AntigravityDriver {
             }
           } else if (m.event === 'result') {
             const r = m.result || {};
+            if (r.usage) onEvent({ type: 'usage', fresh: (r.usage.input_tokens || 0), cached: r.usage.cache_read_tokens || 0, output: r.usage.output_tokens || 0 });
             if (r.status === 'SUCCESS') { if (!sawText && r.response) onEvent({ type: 'text', delta: r.response }); out = { status: 'done' }; }
             else { const e = typeof r.error === 'string' ? r.error : r.error?.message || r.status || 'Antigravity stopped with an error'; out = { status: isLimitError(e) ? 'limit' : 'error', error: e }; }
           }

@@ -13,7 +13,7 @@ export function claudeToolDetail(name, input = {}) {
 export class ClaudeDriver {
   constructor(opts) { this.o = opts; }
 
-  run({ prompt, cwd, mode, model, sessionId, instructions, mcp, onEvent, onApproval, signal }) {
+  run({ prompt, cwd, mode, model, effort, sessionId, instructions, mcp, onEvent, onApproval, signal }) {
     return new Promise((resolve) => {
       const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
         '--permission-prompt-tool', 'stdio', '--permission-mode', MODES[mode] || 'manual', '--disallowedTools', 'AskUserQuestion',
@@ -22,6 +22,7 @@ export class ClaudeDriver {
         '--allowedTools', 'mcp__copycli'];
       if (mode === 'full') args.push('--allow-dangerously-skip-permissions');
       if (model) args.push('--model', model);
+      if (effort) args.push('--effort', effort);
       if (sessionId) args.push('--resume', sessionId);
       let sid = sessionId, out, rate, sawText = false;
       const tools = new Map();
@@ -50,7 +51,7 @@ export class ClaudeDriver {
             }
           } else if (m.type === 'rate_limit_event') {
             rate = m.rate_limit_info;
-            onEvent({ type: 'limits', info: { status: rate?.status, resetsAt: rate?.resetsAt, kind: rate?.rateLimitType } });
+            onEvent({ type: 'limits', info: { status: rate?.status, resetsAt: rate?.resetsAt, kind: rate?.rateLimitType, ...(Number.isFinite(rate?.utilization) ? { windows: [{ usedPercent: Math.round(rate.utilization <= 1 ? rate.utilization * 100 : rate.utilization), resetsAt: rate.resetsAt, minutes: rate.rateLimitType === 'five_hour' ? 300 : 10080 }] } : {}) } });
           } else if (m.type === 'control_request') {
             const r = m.request || {};
             let response = {};
@@ -69,7 +70,7 @@ export class ClaudeDriver {
               if (!sawText && text) onEvent({ type: 'text', delta: text });
               out = { status: 'done' };
             }
-            onEvent({ type: 'usage', input: m.usage?.input_tokens, output: m.usage?.output_tokens });
+            if (m.usage) onEvent({ type: 'usage', calls: m.num_turns, fresh: (m.usage.input_tokens || 0) + (m.usage.cache_creation_input_tokens || 0), cached: m.usage.cache_read_input_tokens || 0, output: m.usage.output_tokens || 0 });
             p.end();
           }
         },

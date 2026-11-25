@@ -1,6 +1,10 @@
 // Codex, driven through `codex app-server` (JSON-RPC over stdio).
 import { spawnRpc } from './proc.js';
 import { isLimitError } from '../limits.js';
+import { codexUsage } from './probe.js';
+
+// Codex's own plugins (desktop control, its browser, documents, apps) are sent with every call and repeat what CopyCLI offers.
+const LEAN = { plugins: false, apps: false, computer_use: false, browser_use: false, image_generation: false, multi_agent: false };
 
 const MODES = {
   plan: { approvalPolicy: 'never', sandbox: 'read-only', policy: { type: 'readOnly', networkAccess: false } },
@@ -64,11 +68,19 @@ export class CodexDriver {
       if (t) {
         const w = [r.primary, r.secondary].filter(Boolean).sort((a, b) => b.usedPercent - a.usedPercent)[0];
         if (w?.resetsAt) t.resetsAt = w.resetsAt;
-        t.onEvent({ type: 'limits', info: { usedPercent: w?.usedPercent, resetsAt: w?.resetsAt } });
+        t.onEvent({ type: 'limits', info: { windows: codexUsage(r) } });
       }
       return;
     }
     if (!t || (p.threadId && p.threadId !== this.thread)) return;
+    if (method === 'thread/tokenUsage/updated') {
+      const { total, last } = p.tokenUsage;
+      t.base ||= { i: total.inputTokens - last.inputTokens, c: total.cachedInputTokens - last.cachedInputTokens, o: total.outputTokens - last.outputTokens };
+      if (t.seenTotal !== total.totalTokens) { t.seenTotal = total.totalTokens; t.calls = (t.calls || 0) + 1; }
+      const cached = total.cachedInputTokens - t.base.c;
+      t.onEvent({ type: 'usage', calls: t.calls, fresh: total.inputTokens - t.base.i - cached, cached, output: total.outputTokens - t.base.o });
+      return;
+    }
     if (method === 'item/agentMessage/delta') {
       if (t.item !== p.itemId) { t.item = p.itemId; t.onEvent({ type: 'break' }); }
       t.streamed.add(p.itemId);
@@ -97,7 +109,7 @@ export class CodexDriver {
     }
   }
 
-  async run({ prompt, cwd, mode, model, sessionId, instructions, mcp, onEvent, onApproval, signal }) {
+  async run({ prompt, cwd, mode, model, effort, lean, sessionId, instructions, mcp, onEvent, onApproval, signal }) {
     const m = MODES[mode] || MODES.ask;
     let finish;
     const ended = new Promise((r) => { finish = r; });
@@ -109,7 +121,7 @@ export class CodexDriver {
     try {
       await this.start(cwd);
       const base = { cwd, model: model || null, approvalPolicy: m.approvalPolicy, sandbox: m.sandbox, developerInstructions: instructions,
-        config: { mcp_servers: { copycli: { url: mcp.url, http_headers: { Authorization: `Bearer ${mcp.token}` } } } } };
+        config: { ...(lean ? { features: LEAN } : {}), mcp_servers: { ...(lean ? { node_repl: { enabled: false } } : {}), copycli: { url: mcp.url, http_headers: { Authorization: `Bearer ${mcp.token}` } } } } };
       if (!this.thread) {
         let r = null;
         if (sessionId) r = await this.rpc.request('thread/resume', { threadId: sessionId, ...base, excludeTurns: true }).catch(() => null);
@@ -119,7 +131,7 @@ export class CodexDriver {
       }
       if (signal.aborted) return { status: 'cancelled', sessionId: this.thread };
       signal.addEventListener('abort', stop);
-      const r = await this.rpc.request('turn/start', { threadId: this.thread, input: [{ type: 'text', text: prompt, text_elements: [] }], cwd, approvalPolicy: m.approvalPolicy, sandboxPolicy: m.policy, model: model || null });
+      const r = await this.rpc.request('turn/start', { threadId: this.thread, input: [{ type: 'text', text: prompt, text_elements: [] }], cwd, approvalPolicy: m.approvalPolicy, sandboxPolicy: m.policy, model: model || null, effort: effort || null });
       this.turnId = r.turn.id;
       if (signal.aborted) stop();
       return { sessionId: this.thread, ...(await ended) };

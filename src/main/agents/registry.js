@@ -7,6 +7,7 @@ import { CodexDriver } from './codex.js';
 import { AntigravityDriver } from './antigravity.js';
 import { AcpDriver } from './acp.js';
 import { agentEnv, which } from '../env.js';
+import { probe } from './probe.js';
 
 // Newest file matching a path with one or more "*" directory segments.
 function newest(pattern) {
@@ -65,6 +66,8 @@ export async function detect(def) {
   }
   return { installed: true, path: p, signedIn };
 }
+
+export async function probeAgent(def, info, version) { return probe(def, info.path, await agentEnv(), version); }
 
 export async function makeDriver(def, info, version) {
   const o = { path: info.path, args: def.args, env: await agentEnv(), version };
