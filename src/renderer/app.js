@@ -1,7 +1,8 @@
 import { markdown } from './markdown.js';
+import { createSettings } from './settings.js';
 const $ = (id) => document.getElementById(id);
 const h = (tag, props = {}, ...kids) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(props)) { if (v === undefined || v === null || v === false) continue; if (k.startsWith('on')) e[k] = v; else if (k === 'class') e.className = v; else if (k === 'c') e.style.setProperty('--c', v); else if (k in e && k !== 'list') e[k] = v; else e.setAttribute(k, v); } e.append(...kids.flat().filter((x) => x !== null && x !== undefined && x !== false)); return e; };
-let agents = [], chats = [], chat = null, approvals = [], tabs = { tabs: [], active: null }, settings = {}, home = '';
+let agents = [], chats = [], chat = null, approvals = [], tabs = { tabs: [], active: null }, settings = {}, home = '', version = '';
 let picked = new Set(JSON.parse(localStorage.picked || '[]'));
 let toastTimer;
 const toast = (t) => { $('toast').textContent = t; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 5000); };
@@ -12,10 +13,36 @@ const ready = () => agents.filter((a) => a.installed && a.enabled && a.signedIn 
 const dot = (id, live) => h('span', { class: `dot${live ? ' live' : ''}`, c: agent(id).color });
 const nice = (p) => (p.startsWith(home) ? `~${p.slice(home.length)}` : p);
 
+// Small local SVGs keep the app crisp at every display scale, without a network font.
+const icons = {
+  layers: ['M4 7l8-4 8 4-8 4-8-4Z', 'm4 12 8 4 8-4', 'm4 17 8 4 8-4'],
+  plus: ['M12 5v14', 'M5 12h14'],
+  settings: ['M9 3h6l1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1 1-3Z', 'M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0'],
+  panel: ['M4 4h16v16H4z', 'M14 4v16'],
+  folder: ['M3 6h7l2 2h9v12H3z'],
+  'arrow-up': ['M12 19V5', 'm6 11 6-6 6 6'],
+  code: ['m8 7-5 5 5 5', 'm16 7 5 5-5 5', 'm14 4-4 16'],
+  search: ['M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0', 'm15 15 6 6'],
+};
+function icon(name) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('class', 'icon'); svg.setAttribute('aria-hidden', 'true');
+  for (const d of icons[name] || icons.layers) { const path = document.createElementNS(svg.namespaceURI, 'path'); path.setAttribute('d', d); svg.append(path); }
+  return svg;
+}
+document.querySelectorAll('[data-icon]').forEach((e) => e.replaceWith(icon(e.dataset.icon)));
+const readyBadges = () => h('div', { class: 'ready-agents', 'aria-label': 'Available agents' }, ready().map((a) => h('span', { class: 'ready-agent' }, dot(a.id), a.name)));
+function starter(name, detail, glyph, prompt) {
+  return h('button', { class: 'starter', onclick: () => { $('input').value = prompt; fit(); $('input').focus(); } }, icon(glyph), h('span', {}, name, h('small', {}, detail)));
+}
+function composerHint() { $('send-hint').textContent = settings.sendKey === 'mod' ? `${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'} + Enter to send` : 'Enter to send'; }
+
+
 // ---- sidebar ----
 function drawChats() {
+  $('chat-count').textContent = chats.length || '';
   $('chats').replaceChildren(...chats.map((c) => h('div', { class: `chat${chat?.id === c.id ? ' on' : ''}` },
-    h('button', { class: 'open', onclick: () => open(c.id) }, h('div', { class: 't' }, c.title), h('div', { class: 'f' }, nice(c.cwd))),
+    h('button', { class: 'open', 'aria-current': chat?.id === c.id ? 'page' : undefined, onclick: () => open(c.id) }, h('div', { class: 't' }, c.title), h('div', { class: 'f' }, nice(c.cwd))),
     c.running ? h('span', { class: 'dot live' }) : null,
     h('button', { class: 'x', title: 'Delete chat', 'aria-label': `Delete ${c.title}`, onclick: async () => { if (await call('chat:delete', c.id) && chat?.id === c.id) { chat = null; drawChat(); } } }, '✕'))));
   $('stop').hidden = !chats.find((c) => c.id === chat?.id)?.running;
@@ -34,17 +61,28 @@ async function newChat() { const c = await call('chat:new'); if (c) open(c.id); 
 const cards = new Map();
 function drawChat() {
   cards.clear();
-  for (const x of ['title', 'folder', 'composer']) $(x).hidden = !chat;
+  for (const x of ['title', 'folder', 'composer', 'composer-hint']) $(x).hidden = !chat;
+  composerHint();
   if (!chat) {
     const n = ready();
-    $('log').replaceChildren(h('div', { class: 'empty' }, h('h1', {}, 'CopyCLI'), h('p', {}, n.length ? `Ready: ${n.map((a) => a.name).join(', ')}.` : 'No agent is ready yet. Open Agents to install one or sign in.'), h('button', { class: 'primary', onclick: newChat }, 'Choose a folder to start')));
+    $('log').replaceChildren(h('div', { class: 'empty' },
+      h('div', { class: 'welcome-mark' }, icon('layers')),
+      h('div', { class: 'eyebrow' }, 'One workspace. Your agents.'),
+      h('h1', {}, 'Good work starts here.'),
+      h('p', {}, n.length ? 'Bring your coding agents together. One conversation, a shared folder, and room to build.' : 'Connect your first coding agent in Settings, then choose a folder to start building.'),
+      h('button', { class: 'primary', onclick: n.length ? newChat : () => prefs.open('agents') }, icon(n.length ? 'plus' : 'settings'), n.length ? 'Start a conversation' : 'Connect an agent'), readyBadges()));
     drawApprovals();
     return;
   }
-  $('title').value = chat.title; $('folder').textContent = nice(chat.cwd); $('mode').value = chat.mode;
+  $('title').value = chat.title; $('folder').replaceChildren(icon('folder'), h('span', { class: 'folder-name' }, nice(chat.cwd))); $('folder').title = `Change folder · ${chat.cwd}`; $('mode').value = chat.mode;
   $('log').replaceChildren();
   chat.messages.forEach(place);
-  if (!chat.messages.length) $('log').append(h('div', { class: 'empty' }, h('p', {}, 'Pick one agent or several. They share this chat and this folder, and each one sees what the others did.')));
+  if (!chat.messages.length) $('log').append(h('div', { class: 'empty' },
+    h('div', { class: 'welcome-mark' }, icon('layers')), h('div', { class: 'eyebrow' }, 'Your next idea starts here'),
+    h('h1', {}, 'What are we building?'), h('p', {}, 'Pick your agents below. Give them one goal or a task each — they’ll work together in this folder.'),
+    h('div', { class: 'starter-grid' },
+      starter('Build something', 'Turn an idea into working code', 'code', 'Help me build '),
+      starter('Explore this project', 'Understand the code and structure', 'search', 'Explore this project and explain its structure and how to run it.'))));
   drawTargets(); drawApprovals();
 }
 function place(m) {
@@ -94,11 +132,11 @@ function agentCard(m, keep = new Set()) {
 function drawTargets() {
   const r = ready();
   if (![...picked].some((id) => r.some((a) => a.id === id)) && r[0]) picked = new Set([r[0].id]);
-  $('targets').replaceChildren(...r.map((a) => h('button', { type: 'button', class: 'chip', c: a.color, 'aria-pressed': String(picked.has(a.id)), onclick: () => { picked.has(a.id) ? picked.delete(a.id) : picked.add(a.id); localStorage.picked = JSON.stringify([...picked]); drawTargets(); } }, dot(a.id), a.name, a.limitedUntil ? h('span', { class: 'lim' }, 'limit') : a.usage.length ? h('span', { class: Math.max(...a.usage.map((u) => u.usedPercent)) >= 80 ? 'lim' : 'pct', title: usageText(a) }, `${Math.max(...a.usage.map((u) => u.usedPercent))}%`) : null)), ...(r.length ? [] : [h('button', { type: 'button', onclick: showAgents }, 'Set up an agent')]));
+  $('targets').replaceChildren(...r.map((a) => h('button', { type: 'button', class: 'chip', c: a.color, 'aria-pressed': String(picked.has(a.id)), onclick: () => { picked.has(a.id) ? picked.delete(a.id) : picked.add(a.id); localStorage.picked = JSON.stringify([...picked]); drawTargets(); } }, dot(a.id), a.name, a.limitedUntil ? h('span', { class: 'lim' }, 'limit') : a.usage.length ? h('span', { class: Math.max(...a.usage.map((u) => u.usedPercent)) >= 80 ? 'lim' : 'pct', title: usageText(a) }, `${Math.max(...a.usage.map((u) => u.usedPercent))}%`) : null)), ...(r.length ? [] : [h('button', { type: 'button', onclick: () => prefs.open('agents') }, 'Set up an agent')]));
   $('models').replaceChildren(...r.filter((a) => picked.has(a.id) && a.models.length).map((a) => h('span', { class: 'mset' }, r.filter((x) => picked.has(x.id)).length > 1 ? h('span', { class: 'dim' }, a.name) : null, ...pickers(a))));
 }
 const usageText = (a) => a.usage.map((u) => `${u.usedPercent}% of the ${span(u.minutes)} limit${u.resetsAt ? `, resets ${new Date(u.resetsAt * 1000).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}`).join(' · ');
-// Model and effort menus for one agent, used under the message box and in Agents.
+// Model and effort menus for one agent, used under the message box and in Settings.
 function pickers(a) {
   const def = a.models.find((m) => m.id === a.defaultModel)?.name || a.defaultModel;
   const known = !a.model || a.models.some((m) => m.id === a.model);
@@ -134,7 +172,7 @@ $('input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pick(list[mIdx].id, m); return; }
     if (e.key === 'Escape') { $('mentions').hidden = true; return; }
   }
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send().catch(() => {}); }
+  if (e.key === 'Enter' && (settings.sendKey === 'mod' ? e.metaKey || e.ctrlKey : !e.shiftKey)) { e.preventDefault(); send().catch(() => {}); }
 });
 $('composer').onsubmit = (e) => { e.preventDefault(); send().catch(() => {}); };
 $('stop').onclick = () => go('stop', chat.id);
@@ -148,45 +186,20 @@ function drawApprovals() {
     h('div', { class: 'row' }, h('button', { class: 'primary', onclick: () => go('approve', a.id, 'allow') }, 'Allow once'), a.canAlways ? h('button', { onclick: () => go('approve', a.id, 'always') }, a.alwaysLabel) : null, h('button', { class: 'bad', onclick: () => go('approve', a.id, 'deny') }, 'Deny')))));
 }
 
-// ---- agents ----
-const setGuard = async (g) => { settings = await call('settings:set', { guard: g }).catch(() => settings); };
-const num = (k, min, max, label) => h('label', {}, h('input', { type: 'number', min, max, value: settings.guard[k], onchange: async (e) => { await setGuard({ [k]: Number(e.target.value) }); e.target.value = settings.guard[k]; } }), ` ${label}`);
-async function showAgents() {
-  const d = $('agents-dlg'), agy = await window.deck.call('agy:tools').catch(() => false);
-  const row = (a, i, n) => h('div', { class: 'a' }, h('span', { class: 'dot', c: a.color }), h('div', { class: 'nm' }, a.name, h('div', { class: 's' }, !a.installed ? 'Not installed' : a.signedIn === false ? 'Not signed in' : a.limitedUntil ? `Out of usage until ${new Date(a.limitedUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : a.usage.length ? usageText(a) : a.signedIn ? 'Ready' : 'Installed')),
-    !a.installed ? (a.install || a.site ? h('button', { title: a.install || a.site, onclick: () => go('agents:install', a.id) }, a.install ? 'Install' : 'Get it') : null) : [
-      ...(a.models.length ? pickers(a) : a.kind === 'acp' ? [h('span', { class: 's' }, 'Models appear after first use')] : [h('input', { type: 'text', placeholder: 'Default model', value: a.model, 'aria-label': `${a.name} model`, onchange: (e) => go('agents:set', a.id, { model: e.target.value }) })]),
-      a.canLogin ? h('button', { onclick: () => go('agents:login', a.id) }, 'Sign in') : null,
-      h('label', {}, h('input', { type: 'checkbox', checked: a.enabled, onchange: (e) => go('agents:set', a.id, { enabled: e.target.checked }) }), ' On')],
-    a.custom ? h('button', { class: 'quiet', onclick: () => go('agents:remove', a.id) }, 'Remove') : null,
-    a.installed ? [h('button', { class: 'ord', disabled: !i, 'aria-label': `Move ${a.name} up`, onclick: () => go('agents:set', a.id, { move: -1 }) }, '↑'), h('button', { class: 'ord', disabled: i === n - 1, 'aria-label': `Move ${a.name} down`, onclick: () => go('agents:set', a.id, { move: 1 }) }, '↓')] : null);
-  const inst = agents.filter((a) => a.installed), rest = agents.filter((a) => !a.installed);
-  const nm = h('input', { type: 'text', placeholder: 'Name' }), cmd = h('input', { type: 'text', placeholder: 'Command, e.g. my-agent acp', size: 28 });
-  d.replaceChildren(...[h('h2', {}, 'Agents'), h('p', {}, 'Each agent uses its own command-line app and your own sign-in. When one runs out of usage, the next one in this order continues.'),
-    ...inst.map((a, i) => row(a, i, inst.length)),
-    h('div', { class: 'foot' }, h('label', {}, h('input', { type: 'checkbox', checked: settings.autoHandoff, onchange: (e) => { settings.autoHandoff = e.target.checked; go('settings:set', { autoHandoff: e.target.checked }); } }), ' Hand over automatically when one runs out')),
-    inst.some((a) => a.id === 'antigravity') ? h('div', { class: 'foot' }, h('label', { title: 'Adds a "copycli" entry to ~/.gemini/config/mcp_config.json' }, h('input', { type: 'checkbox', checked: agy, onchange: (e) => go('agy:tools', e.target.checked) }), ' Give Antigravity the browser and team tools (edits its MCP config)')) : null,
-    h('h3', {}, 'Saving usage'),
-    h('div', { class: 'foot' }, h('label', {}, h('input', { type: 'checkbox', checked: settings.guard.on, onchange: (e) => setGuard({ on: e.target.checked }) }), ' Pause an agent when it'), ),
-    h('div', { class: 'foot indent' }, 'uses', num('perTask', 1, 100, '% of your limit on one task'), 'or leaves less than', num('reserve', 0, 90, '% of it.'), 'If its limit is unknown, after', num('actions', 5, 500, 'actions.')),
-    h('div', { class: 'foot' }, h('label', { title: 'Codex sends its plugins with every call. CopyCLI has its own browser, so they are usually wasted.' }, h('input', { type: 'checkbox', checked: settings.leanCodex, onchange: (e) => { settings.leanCodex = e.target.checked; go('settings:set', { leanCodex: e.target.checked }); } }), ' Run Codex without its own plugins (uses less, and keeps it off your desktop)')),
-    h('h3', {}, 'More agents'), ...rest.map((a) => row(a)),
-    h('h3', {}, 'Add your own (any agent that speaks ACP)'), h('div', { class: 'foot' }, nm, cmd, h('button', { onclick: async () => { await call('agents:add', { name: nm.value, command: cmd.value }).catch(() => {}); } }, 'Add')),
-    h('div', { class: 'foot' }, h('button', { onclick: () => go('agents:refresh') }, 'Refresh'), h('span', { class: 'grow' }), h('button', { class: 'primary', onclick: () => d.close() }, 'Done'))].filter(Boolean));
-  if (!d.open) { d.showModal(); layout(); }
-}
-$('agents-dlg').addEventListener('close', () => layout());
-$('agents-btn').onclick = showAgents;
+// ---- settings ----
+const prefs = createSettings({ root: $('settings'), h, call, go, pickers, span, state: () => ({ agents, settings, version }), save: async (p) => { settings = await call('settings:set', p); composerHint(); }, onToggle: (on) => { for (const x of ['side', 'main', 'web']) $(x).inert = on; layout(); } });
+$('settings-btn').onclick = () => prefs.open();
 $('new').onclick = () => newChat().catch(() => {});
 
 // ---- browser ----
 function layout() {
-  const on = !$('web').hidden && !$('agents-dlg').open && tabs.active;
+  const on = !$('web').hidden && !prefs.isOpen && tabs.active;
   const r = $('view').getBoundingClientRect();
   window.deck.call('browser:bounds', on ? { x: r.x, y: r.y, width: r.width, height: r.height } : null);
 }
 function toggleWeb(show = $('web').hidden, fresh = true) {
   $('web').hidden = $('grip').hidden = !show;
+  $('browser-btn').setAttribute('aria-expanded', String(show));
   if (show && fresh && !tabs.tabs.length) go('browser:new');
   layout();
 }
@@ -211,7 +224,7 @@ document.addEventListener('click', (e) => { const a = e.target.closest('a[href]'
 
 // ---- events ----
 window.deck.on((ch, d) => {
-  if (ch === 'agents') { agents = d; if (chat) drawTargets(); else drawChat(); if ($('agents-dlg').open) showAgents(); drawWeb(); }
+  if (ch === 'agents') { agents = d; if (chat) drawTargets(); else drawChat(); prefs.refresh(); drawWeb(); }
   if (ch === 'chats') { chats = d; const c = chats.find((x) => x.id === chat?.id); if (c && document.activeElement !== $('title')) $('title').value = c.title; drawChats(); }
   if (ch === 'message' && d.chatId === chat?.id) {
     const log = $('log'), atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 90;
@@ -220,16 +233,18 @@ window.deck.on((ch, d) => {
     place(d.message);
     if (atEnd || d.message.role === 'user') log.scrollTop = 1e9;
   }
-  if (ch === 'usage') { const a = agents.find((x) => x.id === d.agentId); if (a) { a.usage = d.usage; if (chat) drawTargets(); } }
+  if (ch === 'usage') { const a = agents.find((x) => x.id === d.agentId); if (a) { a.usage = d.usage; if (chat) drawTargets(); prefs.refresh(); } }
   if (ch === 'approval') { approvals.push(d); drawApprovals(); if (d.chatId !== chat?.id) toast(`${agent(d.agentId).name} needs your approval in another chat`); }
   if (ch === 'approval-done') { approvals = approvals.filter((a) => a.id !== d.id); drawApprovals(); }
   if (ch === 'browser:state') { tabs = d; drawWeb(); }
-  if (ch === 'browser:used' && d.chatId === chat?.id && $('web').hidden && !layout.seen) { layout.seen = true; toggleWeb(true, false); }
+  if (ch === 'browser:used' && settings.autoBrowser && d.chatId === chat?.id && $('web').hidden && !layout.seen) { layout.seen = true; toggleWeb(true, false); }
   if (ch === 'browser:notice') toast(d);
-  if (ch === 'menu') ({ new: () => newChat().catch(() => {}), agents: showAgents, browser: () => toggleWeb(), stop: () => chat && go('stop', chat.id) })[d]();
+  if (ch === 'open-chat') { prefs.close(); if (chats.some((c) => c.id === d)) open(d); }
+  if (ch === 'menu') ({ new: () => { prefs.close(); newChat().catch(() => {}); }, settings: () => prefs.open(), browser: () => { if (!prefs.isOpen) toggleWeb(); }, stop: () => chat && go('stop', chat.id) })[d]();
 });
 const s = await call('init');
-({ agents, chats, settings, home } = s); tabs = s.browser;
+({ agents, chats, settings, home, version } = s); tabs = s.browser;
+$('app-version').textContent = `v${version}`;
 drawChats();
 if (localStorage.last && chats.some((c) => c.id === localStorage.last)) await open(localStorage.last); else drawChat();
 drawWeb();

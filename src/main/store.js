@@ -9,7 +9,10 @@ export class Store {
     this.dir = path.join(dir, 'chats');
     fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     this.settingsFile = path.join(dir, 'settings.json');
-    this.settings = { autoHandoff: true, order: ['claude', 'codex', 'antigravity'], disabled: [], models: {}, efforts: { codex: 'low' }, modelLists: {}, custom: [], guard: { on: true, perTask: 5, reserve: 10, actions: 60 }, leanCodex: true, ...read(this.settingsFile, {}) };
+    this.settings = { autoHandoff: true, order: ['claude', 'codex', 'antigravity'], disabled: [], models: {}, efforts: { codex: 'low' }, modelLists: {}, custom: [], guard: { v: 2, on: false, perTask: 10, reserve: 10, actions: 60 }, leanCodex: true, theme: 'system', sendKey: 'enter', notify: true, instructions: '', defaultMode: 'ask', autoBrowser: true, ...read(this.settingsFile, {}) };
+    // 0.2.0 paused every task at 5% without being asked. Undo that unless the numbers were changed.
+    const g = this.settings.guard;
+    if (!g.v) this.settings.guard = { ...g, v: 2, ...(g.perTask === 5 && g.reserve === 10 ? { on: false, perTask: 10 } : {}) };
     this.chats = new Map();
     this.timers = new Map();
     for (const f of fs.readdirSync(this.dir)) {

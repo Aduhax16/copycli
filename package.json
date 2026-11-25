@@ -1,7 +1,7 @@
 {
   "name": "copycli",
   "productName": "CopyCLI",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "One chat for all your coding agents: Claude Code, Codex, Antigravity and any ACP agent, sharing context, a folder and a browser.",
   "license": "MIT",
   "type": "module",

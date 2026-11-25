@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { parseMentions, catchUp, buildPrompt } from '../src/main/context.js';
+import { parseMentions, catchUp, buildPrompt, instructionsFor } from '../src/main/context.js';
 import { isLimitError } from '../src/main/limits.js';
 import { normalizeUrl } from '../src/main/browser-tools.js';
 import { cleanEnv } from '../src/main/env.js';
@@ -19,6 +19,17 @@ const A = [{ id: 'claude', name: 'Claude' }, { id: 'codex', name: 'Codex' }, { i
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'rd-'));
 const until = async (f, ms = 5000) => { const t = Date.now(); for (;;) { const v = f(); if (v) return v; if (Date.now() - t > ms) throw new Error('timed out'); await new Promise((r) => setTimeout(r, 15)); } };
 
+test('the user\'s own instructions reach every agent', () => { assert.match(instructionsFor(A[0], [], '/x', 'ask', ' Be brief. '), /own instructions for every agent:\nBe brief\.$/); assert.doesNotMatch(instructionsFor(A[0], [], '/x', 'ask', ''), /own instructions/); });
+test('new chats start in the chosen mode, and allowed sites can be removed', () => {
+  const { o } = setup({});
+  o.store.settings.defaultMode = 'plan';
+  const c = o.createChat({ cwd: tmp() });
+  assert.equal(c.mode, 'plan');
+  c.sites.push('a.com', 'b.com');
+  assert.deepEqual(o.sites().map((s) => s.host), ['a.com', 'b.com']);
+  o.removeSite(c.id, 'a.com');
+  assert.deepEqual(c.sites, ['b.com']);
+});
 test('mentions split work', () => {
   assert.deepEqual(parseMentions('Build a site. @claude do the html and @codex do the css', A), [{ id: 'claude', task: 'Build a site.\n\ndo the html' }, { id: 'codex', task: 'Build a site.\n\ndo the css' }]);
   assert.deepEqual(parseMentions('@claude and @agy: review it', A), [{ id: 'claude', task: 'review it' }, { id: 'antigravity', task: 'review it' }]);
@@ -37,13 +48,29 @@ import { isContent } from '../src/main/mcp.js';
 const W = (p, m = 300) => ({ usedPercent: p, resetsAt: Math.round(Date.now() / 1000) + 9000, minutes: m });
 test('tool data is never mistaken for MCP content', () => { assert.ok(!isContent([{ id: 't1', url: 'u' }])); assert.ok(!isContent([])); assert.ok(isContent([{ type: 'text', text: 'x' }])); });
 test('agy model list', () => assert.deepEqual(parseAgyModels('Available models:\n  gemini-3-pro  Gemini 3 Pro\n* claude-sonnet-5-5 (default)\n').map((m) => m.id), ['gemini-3-pro', 'claude-sonnet-5-5']));
+test('by default heavy use is announced once and never stopped', async () => {
+  const { o } = setup({ codex: async ({ onEvent, signal }) => { for (const p of [15, 22, 30]) onEvent({ type: 'limits', info: { windows: [W(p)] } }); return { status: signal.aborted ? 'cancelled' : 'done' }; } });
+  await o.refreshAgents();
+  o.usage.set('codex', [W(10)]);
+  const c = o.createChat({ cwd: tmp() });
+  o.send(c.id, 'go', ['codex']);
+  await done(o);
+  assert.equal(c.messages.find((x) => x.role === 'agent').status, 'done');
+  assert.equal(c.messages.filter((x) => /still working/.test(x.text || '')).length, 1);
+});
+test('settings saved by 0.2.0 stop pausing; chosen numbers are kept', () => {
+  const at = (guard) => { const d = tmp(); fs.writeFileSync(path.join(d, 'settings.json'), JSON.stringify({ guard })); return new Store(d).settings.guard; };
+  assert.equal(at({ on: true, perTask: 5, reserve: 10, actions: 60 }).on, false);
+  assert.deepEqual(at({ on: true, perTask: 25, reserve: 10, actions: 60 }), { v: 2, on: true, perTask: 25, reserve: 10, actions: 60 });
+});
 test('a task that uses too much of the plan is paused and can continue', async () => {
   let n = 0;
   const { o } = setup({ codex: ({ onEvent, signal, prompt }) => new Promise((r) => {
     signal.addEventListener('abort', () => r({ status: 'cancelled', sessionId: 's' }));
-    if (n++) { assert.match(prompt, /Continue this task/); return r({ status: 'done' }); }
+    if (n++) { assert.match(prompt, /Continue this task/); for (const p of [17, 30]) onEvent({ type: 'limits', info: { windows: [W(p)] } }); return r({ status: signal.aborted ? 'cancelled' : 'done' }); }
     for (const p of [11, 13, 16]) onEvent({ type: 'limits', info: { windows: [W(p)] } });
   }) });
+  o.store.settings.guard = { ...o.store.settings.guard, on: true, perTask: 5 };
   await o.refreshAgents();
   o.usage.set('codex', [W(10)]);
   const c = o.createChat({ cwd: tmp() });
@@ -53,10 +80,11 @@ test('a task that uses too much of the plan is paused and can continue', async (
   assert.equal(m.status, 'paused'); assert.match(m.error, /used 6%/);
   o.continueWith(c.id, m.id, 'codex');
   await done(o);
-  assert.equal(c.messages.at(-1).status, 'done');
+  assert.equal(c.messages.filter((x) => x.role === 'agent').at(-1).status, 'done');
 });
 test('a reset window does not count as usage, and endless actions pause', async () => {
   const { o } = setup({ claude: ({ onEvent, signal }) => new Promise((r) => { signal.addEventListener('abort', () => r({ status: 'cancelled' })); for (let i = 0; i < 90 && !signal.aborted; i++) onEvent({ type: 'tool', id: `t${i}`, name: 'Bash', status: 'done' }); }), codex: async ({ onEvent }) => { onEvent({ type: 'limits', info: { windows: [{ usedPercent: 30, resetsAt: Date.now() / 1000 + 90000, minutes: 300 }] } }); return { status: 'done' }; } });
+  o.store.settings.guard = { ...o.store.settings.guard, on: true, perTask: 5 };
   await o.refreshAgents();
   o.usage.set('codex', [W(10)]);
   const c = o.createChat({ cwd: tmp() });
@@ -69,6 +97,7 @@ test('a reset window does not count as usage, and endless actions pause', async 
 test('near the end of the plan it asks first, even with full access', async () => {
   let ran = [];
   const { o, events } = setup({ codex: async () => { ran.push('codex'); return { status: 'done' }; }, claude: async () => { ran.push('claude'); return { status: 'done' }; } });
+  o.store.settings.guard = { ...o.store.settings.guard, on: true, perTask: 5 };
   await o.refreshAgents();
   o.usage.set('codex', [W(95)]);
   const c = o.createChat({ cwd: tmp() });

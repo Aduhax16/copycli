@@ -106,14 +106,50 @@ export async function smoke({ win, orch, browser, mcp, store }) {
       await sleep(900);
       await shot('multi');
       assert.equal(await ui(`document.querySelectorAll('.round .agent').length`), 3);
+      for (let i = 0; i < 6; i++) add({ role: 'agent', agentId: 'claude', note: true, status: 'done', files: [], parts: [{ type: 'text', text: 'A note for the team' }] });
+      await sleep(300);
+      assert.ok(await ui(`[...document.querySelectorAll('.agent.note')].every((e) => e.offsetHeight > 40)`), 'notes keep their height');
       assert.equal(await ui(`document.querySelectorAll('.body img').length + (window.pwned ? 1 : 0)`), 0);
       assert.equal(await ui(`document.querySelectorAll('.ask').length`), 1);
       await ui(`[...document.querySelectorAll('.ask button')].find((b) => b.textContent === 'Deny').click()`);
       await until(() => !orch.approvals.size, 2000, 'deny');
-      await ui(`document.getElementById('agents-btn').click()`);
-      await sleep(500);
-      await shot('agents');
-      assert.ok(!/\bnull\b/.test(await ui(`document.getElementById('agents-dlg').innerText`)));
+      // Settings: every section draws, changes are saved, Escape closes it.
+      c.sites.push('example.com');
+      await ui(`document.getElementById('settings-btn').click()`);
+      const nav = async (n) => { await ui(`document.querySelector('[data-k="nav-${n}"]').click()`); await until(() => ui(`document.querySelector('.st-main')?.dataset.section === '${n}'`), 3000, n); };
+      const press = async (k) => { await ui(`document.querySelector('[data-k="${k}"]').click()`); await sleep(250); };
+      await until(() => ui(`!!document.querySelector('.st-main')`), 3000, 'settings');
+      for (const n of await ui(`[...document.querySelectorAll('.st-nav')].map((e) => e.dataset.k.slice(4))`)) {
+        await nav(n);
+        if (n === 'agents') await ui(`document.querySelector('.st-open')?.click()`);
+        await sleep(300);
+        await shot(`settings-${n}`);
+        assert.ok(!/\b(null|undefined|NaN)\b|\[object/.test(await ui(`document.getElementById('settings').innerText`)), n);
+        assert.ok(await ui(`(() => { const m = document.querySelector('.st-main'); return m.scrollWidth <= m.clientWidth; })()`), `${n} fits`);
+      }
+      await nav('general');
+      await press('theme-light');
+      assert.equal(store.settings.theme, 'light');
+      assert.equal(await ui(`matchMedia('(prefers-color-scheme: light)').matches`), true);
+      await shot('settings-light');
+      await press('theme-dark'); await press('send-mod'); await press('notify');
+      assert.deepEqual([store.settings.theme, store.settings.sendKey, store.settings.notify], ['dark', 'mod', false]);
+      await ui(`(() => { const t = document.querySelector('.st-text'); t.focus(); t.value = 'Be brief.'; t.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+      await sleep(200);
+      assert.equal(store.settings.instructions, 'Be brief.');
+      // A redraw must not take away what is being typed.
+      await nav('agents');
+      await ui(`(() => { const t = document.querySelector('[data-k=add-name]'); t.focus(); t.value = 'half'; t.dispatchEvent(new Event('input')); })()`);
+      orch.emit('agents', orch.agents());
+      await sleep(250);
+      assert.equal(await ui(`document.activeElement.dataset.k + document.activeElement.value`), 'add-namehalf');
+      await nav('permissions');
+      await press('mode-plan');
+      assert.equal(orch.createChat({ cwd: os.tmpdir() }).mode, 'plan');
+      await press(`site-${c.id}-example.com`);
+      assert.ok(!c.sites.includes('example.com'));
+      await ui(`dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }))`);
+      assert.equal(await ui(`document.getElementById('settings').hidden && !document.getElementById('main').inert`), true);
       console.log('ui: ok');
     }
     assert.deepEqual(errors.filter((e) => !/Autofill|Electron Security/.test(e)), []);

@@ -69,7 +69,7 @@ export class Orchestrator {
   agents() {
     const { order, disabled, models } = this.store.settings;
     const rank = (id) => { const i = order.indexOf(id); return i < 0 ? 99 : i; };
-    return this.defs.map((d) => ({ id: d.id, name: d.name, color: d.color, kind: d.kind, custom: !!d.custom, aliases: d.aliases || [], install: d.install || null, site: d.site || null, canLogin: !!d.login, installed: false, ...this.status.get(d.id), enabled: !disabled.includes(d.id), model: models[d.id] || '', effort: this.store.settings.efforts[d.id] || '', models: this.models(d.id), defaultModel: this.info.get(d.id)?.defaultModel || null, usage: this.windows(d.id), limitedUntil: (this.limited.get(d.id) || 0) > Date.now() ? this.limited.get(d.id) : null }))
+    return this.defs.map((d) => ({ id: d.id, name: d.name, color: d.color, kind: d.kind, custom: !!d.custom, aliases: d.aliases || [], install: d.install || null, site: d.site || null, canLogin: !!d.login, about: d.about || '', installed: false, ...this.status.get(d.id), enabled: !disabled.includes(d.id), model: models[d.id] || '', effort: this.store.settings.efforts[d.id] || '', models: this.models(d.id), defaultModel: this.info.get(d.id)?.defaultModel || null, usage: this.windows(d.id), limitedUntil: (this.limited.get(d.id) || 0) > Date.now() ? this.limited.get(d.id) : null }))
       .sort((a, b) => rank(a.id) - rank(b.id));
   }
   usable() { return this.agents().filter((a) => a.installed && a.enabled && a.signedIn !== false); }
@@ -78,7 +78,7 @@ export class Orchestrator {
   listChats() { return [...this.store.chats.values()].map((c) => ({ id: c.id, title: c.title, cwd: c.cwd, updated: c.updated, running: [...this.live.keys()].some((k) => k.startsWith(`${c.id}/`)) })).sort((a, b) => b.updated - a.updated); }
   chat(id) { const c = this.store.chats.get(id); if (!c) throw new Error('That chat no longer exists'); return c; }
   createChat({ cwd }) {
-    const c = { id: randomUUID(), title: 'New chat', cwd: cwd || homedir(), mode: 'ask', created: Date.now(), updated: Date.now(), messages: [], agents: {}, sites: [] };
+    const c = { id: randomUUID(), title: 'New chat', cwd: cwd || homedir(), mode: this.store.settings.defaultMode || 'ask', created: Date.now(), updated: Date.now(), messages: [], agents: {}, sites: [] };
     this.store.chats.set(c.id, c);
     this.store.save(c);
     this.emit('chats', this.listChats());
@@ -115,8 +115,8 @@ export class Orchestrator {
     const usable = this.usable();
     const jobs = parseMentions(text, this.defs, usable.map((a) => a.id)) || selected.filter((id) => usable.some((a) => a.id === id)).map((id) => ({ id, task: text }));
     const off = jobs.filter((j) => !usable.some((a) => a.id === j.id)).map((j) => this.name(j.id));
-    if (off.length) throw new Error(`${off.join(' and ')} ${off.length > 1 ? 'are' : 'is'} not ready. Open Agents to install, sign in or turn on.`);
-    if (!jobs.length) throw new Error(usable.length ? 'Choose at least one agent' : 'No agent is ready. Open Agents to install one or sign in.');
+    if (off.length) throw new Error(`${off.join(' and ')} ${off.length > 1 ? 'are' : 'is'} not ready. Open Settings to install, sign in or turn on.`);
+    if (!jobs.length) throw new Error(usable.length ? 'Choose at least one agent' : 'No agent is ready. Open Settings to install one or sign in.');
     if (chat.title === 'New chat') { chat.title = text.replace(/@\w+\s*/g, '').split('\n')[0].slice(0, 60) || 'New chat'; this.emit('chats', this.listChats()); }
     const round = randomUUID();
     this.push(chat, { role: 'user', text, targets: jobs.map((j) => j.id), round });
@@ -148,6 +148,7 @@ export class Orchestrator {
     };
     turn.startUsage = this.windows(job.id).map((w) => ({ ...w }));
     turn.startUsed = this.used(job.id);
+    turn.spend = !!job.spend;
     if (!job.spend && !(await this.mayStart(chat, job, turn))) return;
     const msg = this.push(chat, { role: 'agent', agentId: job.id, round: job.round, status: 'running', parts: [], files: [], task: job.task });
     turn.msg = msg;
@@ -176,7 +177,7 @@ export class Orchestrator {
       const d = await this.driver(chat, job.id);
       r = turn.abort.signal.aborted ? { status: 'cancelled' } : await d.run({
         prompt: prompt(), cwd: chat.cwd, mode: chat.mode, model: this.store.settings.models[job.id] || '', effort: this.effort(job.id), lean: this.store.settings.leanCodex, sessionId: st.session,
-        instructions: instructionsFor(def, others, chat.cwd, chat.mode), mcp: { ...this.mcpFor(chat.id, job.id), bridge: this.bridge },
+        instructions: instructionsFor(def, others, chat.cwd, chat.mode, this.store.settings.instructions), mcp: { ...this.mcpFor(chat.id, job.id), bridge: this.bridge },
         onEvent, onApproval: (a) => this.askApproval(chat, job.id, a, turn.abort.signal), signal: turn.abort.signal,
       });
     } catch (e) { r = { status: 'error', error: e.message }; }
@@ -195,6 +196,8 @@ export class Orchestrator {
     for (const [id, a] of this.approvals) if (a.chatId === chat.id && a.agentId === job.id) this.resolveApproval(id, 'deny');
     this.live.delete(k);
     this.touch(chat, msg);
+    if (r.status !== 'cancelled') this.emit('turn-end', { chatId: chat.id, agentId: job.id, status: r.status });
+    if (r.status === 'error' && /authentication required|not (logged|signed) in|please (log|sign) in|login required/i.test(r.error || '')) { const s = this.status.get(job.id); if (s) s.signedIn = false; }
     if (r.status === 'limit') this.handOff(chat, job, r);
     else if (r.status === 'done') this.limited.delete(job.id);
     const next = this.queue.get(k)?.shift();
@@ -213,8 +216,13 @@ export class Orchestrator {
   guard(turn) {
     const g = this.store.settings.guard;
     if (!turn.startUsage?.length && this.windows(turn.agentId).length) turn.startUsage = this.windows(turn.agentId).map((w) => ({ ...w }));
-    if (!g.on || turn.paused || turn.abort.signal.aborted) return;
+    if (turn.paused || turn.abort.signal.aborted) return;
     const n = this.name(turn.agentId), spent = this.spent(turn), used = this.used(turn.agentId);
+    if (!g.on || turn.spend) {
+      // Never stop work the user did not ask to have stopped; just say so once.
+      if (spent !== null && spent >= g.perTask && !turn.told) { turn.told = true; this.push(this.chat(turn.chatId), { role: 'system', text: `${n} has used ${spent}% of your plan's limit on this task and is still working.` }); }
+      return;
+    }
     const actions = turn.msg?.parts.filter((p) => p.type === 'tool').length || 0;
     let why = '';
     if (spent !== null && spent >= g.perTask) why = `${n} used ${spent}% of your plan's limit on this task, so it was paused.`;
@@ -304,6 +312,10 @@ export class Orchestrator {
     a.resolve(['allow', 'always'].includes(decision) ? decision : 'deny');
   }
   pendingApprovals(chatId) { return [...this.approvals.values()].filter((a) => a.chatId === chatId).map(({ resolve, ...v }) => v); }
+
+  // Sites the user always allows, per chat.
+  sites() { return [...this.store.chats.values()].flatMap((c) => (c.sites || []).map((host) => ({ chatId: c.id, title: c.title, host }))).sort((a, b) => a.host.localeCompare(b.host)); }
+  removeSite(chatId, host) { const c = this.chat(chatId); c.sites = c.sites.filter((s) => s !== host); this.store.save(c); }
 
   // ---- tools the agents call ----
   mcpFor(chatId, agentId) { return { url: this.mcp.url, token: this.mcp.tokenFor({ chatId, agentId }) }; }

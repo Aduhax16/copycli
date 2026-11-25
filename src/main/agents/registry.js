@@ -23,11 +23,11 @@ function newest(pattern) {
 const acp = (id, name, color, bins, args, extra = {}) => ({ id, name, color, bins, args, kind: 'acp', ...extra });
 
 export const AGENTS = [
-  { id: 'claude', name: 'Claude', color: '#d97757', kind: 'claude', bins: ['claude'], install: 'curl -fsSL https://claude.ai/install.sh | bash', login: ['auth', 'login'], statusArgs: ['auth', 'status', '--json'],
+  { id: 'claude', name: 'Claude', bin: '.local/bin/claude', color: '#d97757', kind: 'claude', bins: ['claude'], install: 'curl -fsSL https://claude.ai/install.sh | bash', login: ['auth', 'login'], statusArgs: ['auth', 'status', '--json'],
     fallback: () => newest(path.join(homedir(), 'Library/Application Support/Claude/claude-code/*/*/claude.app/Contents/MacOS/claude')) },
   { id: 'codex', name: 'Codex', color: '#3f8f78', kind: 'codex', bins: ['codex'], install: 'npm install -g @openai/codex', login: ['login'], statusArgs: ['login', 'status'],
     fallback: () => ['/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex', '/Applications/Codex.app/Contents/Resources/codex'].find((f) => fs.existsSync(f)) },
-  { id: 'antigravity', name: 'Antigravity', color: '#4a7fd6', aliases: ['agy'], kind: 'antigravity', bins: ['agy'], install: 'curl -fsSL https://antigravity.google/cli/install.sh | bash', login: [] },
+  { id: 'antigravity', name: 'Antigravity', about: 'Gemini models, with your Google account', bin: '.local/bin/agy', color: '#4a7fd6', aliases: ['agy'], kind: 'antigravity', bins: ['agy'], install: 'curl -fsSL https://antigravity.google/cli/install.sh | bash', login: [] },
   acp('gemini', 'Gemini CLI', '#7a6fd0', ['gemini'], ['--acp'], { install: 'npm install -g @google/gemini-cli', login: [] }),
   acp('copilot', 'GitHub Copilot', '#8a6fb0', ['copilot'], ['--acp'], { install: 'npm install -g @github/copilot', login: ['login'] }),
   acp('cursor', 'Cursor', '#7d8590', ['cursor-agent'], ['acp'], { login: ['login'], site: 'https://cursor.com/cli' }),

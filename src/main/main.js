@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, Menu, session } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu, Notification, nativeTheme, session } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +8,7 @@ import { Orchestrator, TOOLS } from './orchestrator.js';
 import { McpServer } from './mcp.js';
 import { Browser } from './browser.js';
 import { forgetEnv } from './env.js';
+import { detect } from './agents/registry.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SMOKE = !app.isPackaged && process.argv.includes('--smoke');
@@ -19,7 +20,21 @@ app.commandLine.appendSwitch('disable-renderer-backgrounding');
 if (!SMOKE && !app.requestSingleInstanceLock()) app.quit();
 
 let win, store, orch, browser, mcp;
-const emit = (ch, data) => { if (win && !win.isDestroyed()) win.webContents.send('event', { ch, data }); };
+const emit = (ch, data) => {
+  if (!win || win.isDestroyed()) return;
+  win.webContents.send('event', { ch, data });
+  if (ch === 'approval') notify(`${orch.name(data.agentId)} needs your approval`, data.title, data.chatId);
+  if (ch === 'turn-end') notify(`${orch.name(data.agentId)} ${{ done: 'finished', limit: 'ran out of usage', paused: 'was paused' }[data.status] || 'stopped'}`, orch.chat(data.chatId).title, data.chatId);
+};
+const notes = new Set(); // kept so clicks still work
+function notify(title, body, chatId) {
+  if (SMOKE || !store.settings.notify || win.isFocused() || !Notification.isSupported()) return;
+  const n = new Notification({ title, body });
+  notes.add(n);
+  n.on('click', () => { if (win) { if (win.isMinimized()) win.restore(); win.show(); emit('open-chat', chatId); } });
+  n.on('close', () => notes.delete(n));
+  n.show();
+}
 
 // Agents that only take stdio MCP servers run this with Electron as Node.
 const bridge = { command: process.execPath, args: [path.join(here, 'mcp-bridge.cjs').replace('app.asar' + path.sep, 'app.asar.unpacked' + path.sep)], env: { ELECTRON_RUN_AS_NODE: '1' } };
@@ -34,6 +49,22 @@ function inTerminal(command) {
   return shell.openPath(f);
 }
 const q = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
+
+// After a button opened Terminal, notice by ourselves when the agent is ready.
+const watching = new Map();
+function watchAgent(id) {
+  clearInterval(watching.get(id));
+  const before = orch.status.get(id), end = Date.now() + 10 * 60e3;
+  const timer = setInterval(async () => {
+    const d = orch.def(id), s = d && await detect(d).catch(() => null);
+    const done = s?.installed && (!before?.installed ? s.signedIn !== false : before.signedIn === false && s.signedIn === true);
+    if (!done && d && Date.now() < end) return;
+    clearInterval(timer);
+    watching.delete(id);
+    if (done) { forgetEnv(); orch.refreshAgents(); }
+  }, 4000);
+  watching.set(id, timer);
+}
 
 const api = {
   init: async () => { const agents = orch.agents(); orch.refreshAgents(); return { agents, chats: orch.listChats(), settings: store.settings, browser: browser.state(), version: app.getVersion(), home: app.getPath('home') }; },
@@ -56,8 +87,17 @@ const api = {
     store.saveSettings();
     emit('agents', orch.agents());
   },
+  // Install if needed, then sign in, in one Terminal window.
+  'agents:connect': (id) => {
+    const d = orch.def(id), s = orch.status.get(id);
+    if (!d?.login || (!s?.path && !d.install)) return api['agents:install'](id);
+    watchAgent(id);
+    const bin = s?.path ? q(s.path) : d.bin ? `"$HOME/${d.bin}"` : d.bins[0];
+    return inTerminal(`${s?.path ? '' : `${d.install} && `}${[bin, ...d.login].join(' ')}`);
+  },
   'agents:install': (id) => { const d = orch.def(id); return d?.install ? inTerminal(d.install) : d?.site && shell.openExternal(d.site); },
-  'agents:login': (id) => { const d = orch.def(id), s = orch.status.get(id); if (d?.login && s?.path) return inTerminal([q(s.path), ...d.login].join(' ')); },
+  'agents:login': (id) => { const d = orch.def(id), s = orch.status.get(id); if (d?.login && s?.path) watchAgent(id);
+    if (d?.login && s?.path) return inTerminal([q(s.path), ...d.login].join(' ')); },
   'agents:add': ({ name, command }) => {
     const [cmd, ...args] = String(command).trim().split(/\s+/), id = String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
     if (!id || !cmd) throw new Error('Give a name and a command');
@@ -81,6 +121,12 @@ const api = {
     const s = store.settings;
     if (typeof p.autoHandoff === 'boolean') s.autoHandoff = p.autoHandoff;
     if (typeof p.leanCodex === 'boolean') { s.leanCodex = p.leanCodex; orch.dropDrivers('codex'); }
+    if (['system', 'light', 'dark'].includes(p.theme)) { s.theme = p.theme; nativeTheme.themeSource = p.theme; }
+    if (['enter', 'mod'].includes(p.sendKey)) s.sendKey = p.sendKey;
+    if (['plan', 'ask', 'edit', 'full'].includes(p.defaultMode)) s.defaultMode = p.defaultMode;
+    if (typeof p.notify === 'boolean') s.notify = p.notify;
+    if (typeof p.autoBrowser === 'boolean') s.autoBrowser = p.autoBrowser;
+    if (typeof p.instructions === 'string' && p.instructions.slice(0, 4000) !== s.instructions) { s.instructions = p.instructions.slice(0, 4000); orch.dropDrivers('codex'); }
     const g = p.guard || {};
     if (typeof g.on === 'boolean') s.guard.on = g.on;
     for (const [k, lo, hi] of [['perTask', 1, 100], ['reserve', 0, 90], ['actions', 5, 500]]) if (Number.isFinite(g[k])) s.guard[k] = Math.min(hi, Math.max(lo, Math.round(g[k])));
@@ -93,6 +139,16 @@ const api = {
   'browser:select': (id) => browser.select(id),
   'browser:close': (id) => browser.close(id),
   'browser:bounds': (b) => browser.setBounds(b),
+  'browser:clear': async () => {
+    const r = await dialog.showMessageBox(win, { type: 'warning', message: 'Clear browsing data?', detail: 'You will be signed out of every site in CopyCLI\'s browser.', buttons: ['Clear', 'Cancel'], defaultId: 1, cancelId: 1 });
+    if (r.response) return false;
+    await Promise.all([browser.ses.clearStorageData(), browser.ses.clearCache(), browser.ses.clearAuthCache()]);
+    emit('browser:notice', 'Browsing data cleared.');
+    return true;
+  },
+  'sites:list': () => orch.sites(),
+  'sites:remove': (chat, host) => orch.removeSite(chat, host),
+  'data:open': () => shell.openPath(app.getPath('userData')),
   'browser:share': (tab, chat, agent) => orch.shareTab(tab, chat, agent),
   reveal: (id) => shell.openPath(orch.chat(id).cwd),
   external: (u) => { if (/^https?:\/\//i.test(u)) return shell.openExternal(u); },
@@ -103,9 +159,10 @@ for (const [ch, fn] of Object.entries(api)) ipcMain.handle(ch, async (e, ...a) =
 });
 
 function menu() {
+  const mac = process.platform === 'darwin', prefs = { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => emit('menu', 'settings') };
   Menu.setApplicationMenu(Menu.buildFromTemplate([
-    ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
-    { label: 'File', submenu: [{ label: 'New Chat', accelerator: 'CmdOrCtrl+N', click: () => emit('menu', 'new') }, { label: 'Agents…', accelerator: 'CmdOrCtrl+,', click: () => emit('menu', 'agents') }, { type: 'separator' }, { role: 'close' }] },
+    ...(mac ? [{ label: app.name, submenu: [{ role: 'about' }, { type: 'separator' }, prefs, { type: 'separator' }, { role: 'services' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] }] : []),
+    { label: 'File', submenu: [{ label: 'New Chat', accelerator: 'CmdOrCtrl+N', click: () => emit('menu', 'new') }, ...(mac ? [] : [prefs]), { type: 'separator' }, { role: 'close' }] },
     { role: 'editMenu' },
     { label: 'View', submenu: [{ label: 'Toggle Browser', accelerator: 'CmdOrCtrl+B', click: () => emit('menu', 'browser') }, { label: 'Stop Agents', accelerator: 'CmdOrCtrl+.', click: () => emit('menu', 'stop') }, { type: 'separator' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }, { role: 'toggleDevTools' }] },
     { role: 'windowMenu' },
@@ -121,6 +178,7 @@ app.whenReady().then(async () => {
   orch.mcp = mcp;
   session.defaultSession.setPermissionRequestHandler((_w, p, cb) => cb(p === 'clipboard-sanitized-write'));
   menu();
+  nativeTheme.themeSource = ['light', 'dark'].includes(store.settings.theme) ? store.settings.theme : 'system';
   win = new BrowserWindow({ width: 1440, height: 900, minWidth: 860, minHeight: 560, show: !SMOKE, titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 17 }, backgroundColor: '#1b1c1e', webPreferences: { preload: path.join(here, '../preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false } });
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
