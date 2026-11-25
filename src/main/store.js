@@ -13,6 +13,9 @@ export class Store {
     // 0.2.0 paused every task at 5% without being asked. Undo that unless the numbers were changed.
     const g = this.settings.guard;
     if (!g.v) this.settings.guard = { ...g, v: 2, ...(g.perTask === 5 && g.reserve === 10 ? { on: false, perTask: 10 } : {}) };
+    // Antigravity's model and thinking level used to be one name.
+    const am = /^(.*)-(low|medium|high|xhigh)$/.exec(this.settings.models.antigravity || '');
+    if (am) { this.settings.models.antigravity = am[1]; this.settings.efforts.antigravity = am[2]; }
     this.chats = new Map();
     this.timers = new Map();
     for (const f of fs.readdirSync(this.dir)) {

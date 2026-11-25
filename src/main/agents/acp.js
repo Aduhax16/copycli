@@ -1,6 +1,17 @@
-// Any agent that speaks the Agent Client Protocol (Gemini CLI, Copilot, OpenCode, Cursor, Goose, ...).
+// Any agent that speaks the Agent Client Protocol (Antigravity, Copilot, OpenCode, Cursor, Goose, ...).
 import { spawnRpc } from './proc.js';
 import { isLimitError } from '../limits.js';
+import { TEAM_TOOLS } from '../team-tools.js';
+import { BROWSER_TOOLS } from '../browser-tools.js';
+
+// CopyCLI's own tools ask for what they need themselves, so agents need not ask again.
+// Exact names only, and never for a command or edit: a title can carry text the model wrote.
+const OWN = new Set([...TEAM_TOOLS, ...BROWSER_TOOLS].flatMap(({ name: n }) => [`mcp_copycli_${n}`, `mcp__copycli__${n}`, `copycli_${n}`, `copycli__${n}`, `copycli/${n}`, `copycli.${n}`, `copycli:${n}`, `copycli - ${n}`, `${n} (copycli MCP Server)`]));
+export function isOwnTool(c = {}) {
+  if (c.kind && c.kind !== 'other') return false;
+  return OWN.has(c.name) || OWN.has(String(c.title || '').replace(/^Run /, ''));
+}
+const MODE = { plan: ['plan'], ask: ['default', 'ask'], edit: ['accept-edits', 'acceptEdits', 'auto-edit', 'auto_edit'], full: ['default', 'ask'] };
 
 const textOf = (c) => (Array.isArray(c) ? c : []).map((x) => (x.type === 'content' ? x.content?.text || '' : x.type === 'diff' ? `${x.path}` : '')).filter(Boolean).join('\n');
 const ERR = { completed: 'done', failed: 'error' };
@@ -12,7 +23,7 @@ export class AcpDriver {
     if (this.rpc?.alive) return;
     this.session = null;
     const rpc = spawnRpc(this.o.path, this.o.args || [], {
-      cwd, env: this.o.env,
+      cwd, env: { ...this.o.env, COPYCLI_MCP_URL: mcp.url, COPYCLI_MCP_TOKEN: mcp.token },
       onRequest: (m, p) => this.request(m, p),
       onNotify: (m, p) => m === 'session/update' && this.update(p),
       onExit: () => { if (this.rpc === rpc) this.rpc = null; },
@@ -32,7 +43,7 @@ export class AcpDriver {
     if (method !== 'session/request_permission') throw Object.assign(new Error('Not supported'), { code: -32601 });
     const t = this.turn, opts = p.options || [], pick = (...k) => opts.find((o) => k.includes(o.kind));
     if (!t) return { outcome: { outcome: 'cancelled' } };
-    const ours = /copycli/i.test(`${p.toolCall?.title || ''} ${p.toolCall?.name || ''}`) && /\b(team|browser)_/.test(`${p.toolCall?.title || ''} ${p.toolCall?.name || ''}`);
+    const ours = isOwnTool(p.toolCall);
     let r;
     if (t.mode === 'plan' && !ours) r = 'deny';
     else if (t.mode === 'full' || ours || (t.mode === 'edit' && p.toolCall?.kind === 'edit')) r = 'allow';
@@ -63,19 +74,35 @@ export class AcpDriver {
 
   // Agents that let the client choose a model list it with the session.
   models(r) {
+    this.choices(r);
     const o = (r?.configOptions || []).find((x) => x.category === 'model' && x.type === 'select');
-    if (o) { this.modelOpt = o.id; return (o.options || []).flatMap((x) => x.options || [x]).map((x) => ({ id: x.value, name: x.name, desc: x.description, efforts: [] })); }
+    if (o) { this.modelOpt = o.id; return (o.options || []).flatMap((x) => x.options || [x]).map((x) => ({ id: x.value, name: x.name, desc: x.description, efforts: this.effortOpt?.values || [] })); }
     this.modelOpt = null;
     return (r?.models?.availableModels || []).map((x) => ({ id: x.modelId, name: x.name, desc: x.description, efforts: [] }));
+  }
+  // Other choices the agent offers with the session: how hard it thinks and what it may do alone.
+  choices(r) {
+    const by = (cat) => (r?.configOptions || []).find((x) => x.category === cat && x.type === 'select');
+    const values = (o) => (o ? (o.options || []).flatMap((x) => x.options || [x]).map((x) => x.value) : []);
+    const e = by('thought_level'), m = by('mode');
+    this.effortOpt = e && { id: e.id, values: values(e) };
+    this.modeOpt = m && { id: m.id, values: values(m), now: m.currentValue };
+  }
+  async setChoices(effort, mode) {
+    const set = (id, value) => this.rpc.request('session/set_config_option', { sessionId: this.session, configId: id, value });
+    if (effort && effort !== this.effort && this.effortOpt?.values.includes(effort)) { await set(this.effortOpt.id, effort); this.effort = effort; }
+    const want = this.modeOpt && (MODE[mode] || []).find((v) => this.modeOpt.values.includes(v));
+    if (want && want !== this.modeOpt.now) { await set(this.modeOpt.id, want); this.modeOpt.now = want; }
   }
   async setModel(model) {
     if (!model || model === this.model) return;
     if (this.modelOpt) await this.rpc.request('session/set_config_option', { sessionId: this.session, configId: this.modelOpt, value: model });
     else await this.rpc.request('session/set_model', { sessionId: this.session, modelId: model });
     this.model = model;
+    this.effort = null; // a new model starts at its own level
   }
 
-  async run({ prompt, cwd, mode, model, sessionId, instructions, mcp, onEvent, onApproval, signal }) {
+  async run({ prompt, cwd, mode, model, effort, sessionId, instructions, mcp, onEvent, onApproval, signal }) {
     this.turn = { onEvent, onApproval, mode, signal, kinds: new Map() };
     const stop = () => { if (this.session) this.rpc?.notify('session/cancel', { sessionId: this.session }); setTimeout(() => { if (this.turn?.signal === signal) this.dispose(); }, 4000).unref(); };
     signal.addEventListener('abort', stop);
@@ -89,12 +116,16 @@ export class AcpDriver {
           try { const r = await this.rpc.request('session/load', { sessionId, ...base }); this.session = sessionId; const ms = this.models(r); if (ms.length) onEvent({ type: 'models', models: ms }); } catch {}
           this.turn.loading = false;
         }
-        if (!this.session) { const r = await this.rpc.request('session/new', base); this.session = r.sessionId; this.model = null; const ms = this.models(r); if (ms.length) onEvent({ type: 'models', models: ms }); fresh = true; if (sessionId) onEvent({ type: 'session-lost' }); }
+        if (!this.session) { const r = await this.rpc.request('session/new', base); this.session = r.sessionId; this.model = this.effort = null; const ms = this.models(r); if (ms.length) onEvent({ type: 'models', models: ms }); fresh = true; if (sessionId) onEvent({ type: 'session-lost' }); }
         onEvent({ type: 'session', id: this.session });
       }
       if (signal.aborted) return { status: 'cancelled', sessionId: this.session };
       await this.setModel(model).catch((e) => onEvent({ type: 'text', delta: `_Could not switch to ${model}: ${e.message}_\n\n` }));
+      await this.setChoices(effort, mode).catch((e) => onEvent({ type: 'text', delta: `_Could not apply a setting: ${e.message}_\n\n` }));
+      if (signal.aborted) return { status: 'cancelled', sessionId: this.session };
       const r = await this.rpc.request('session/prompt', { sessionId: this.session, prompt: [{ type: 'text', text: fresh || !sessionId ? `${instructions}\n\n${prompt}` : prompt }] });
+      const u = r?.usage;
+      if (u) onEvent({ type: 'usage', fresh: (u.inputTokens || 0) + (u.cachedWriteTokens || 0), cached: u.cachedReadTokens || 0, output: u.outputTokens || 0 });
       if (r?.stopReason === 'cancelled') return { status: 'cancelled', sessionId: this.session };
       return { status: r?.stopReason === 'refusal' ? 'error' : 'done', error: r?.stopReason === 'refusal' ? 'The agent declined this request.' : undefined, sessionId: this.session };
     } catch (e) {

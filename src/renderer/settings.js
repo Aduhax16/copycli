@@ -110,7 +110,7 @@ export function createSettings({ root, h, call, go, state, save, pickers, onTogg
         row('Model', a.models.length ? '' : a.kind === 'acp' ? 'Models appear after first use.' : '', model || (a.kind === 'acp' ? null : h('input', { type: 'text', placeholder: 'Default model', value: a.model, 'data-k': `model-${a.id}`, 'aria-label': `${a.name} model`, onchange: (e) => go('agents:set', a.id, { model: e.target.value }) }))),
         effort ? row('Effort', 'Less effort uses less of your limit.', effort) : null,
         a.id === 'codex' ? row('Run without its own plugins', 'Uses less, and keeps Codex off your desktop. CopyCLI has its own browser.', toggle('lean', 'Run Codex without its own plugins', S().leanCodex, flip('leanCodex'))) : null,
-        a.id === 'antigravity' ? row('Browser and team tools', 'Adds a "copycli" entry to ~/.gemini/config/mcp_config.json.', toggle('agy', 'Give Antigravity the browser and team tools', agy, async (v) => { await call('agy:tools', v).catch(() => {}); draw(); })) : null,
+        a.id === 'antigravity' && agy ? row('Old tools entry', 'CopyCLI no longer needs its "copycli" entry in ~/.gemini/config/mcp_config.json.', button('Remove entry', async () => { await call('agy:tools', false).catch(() => {}); draw(); }, { 'data-k': 'agy' })) : null,
         a.canLogin ? row('Account', a.signedIn === false ? 'Not signed in.' : 'Opens Terminal to sign in or switch account.', button(a.signedIn === false ? 'Sign in' : 'Sign in again', () => go('agents:login', a.id))) : null,
         row('Location', a.path || ''),
         a.custom ? row('Remove this agent', '', button('Remove', () => go('agents:remove', a.id), { class: 'bad' })) : null) : null);

@@ -4,7 +4,6 @@ import { homedir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { ClaudeDriver } from './claude.js';
 import { CodexDriver } from './codex.js';
-import { AntigravityDriver } from './antigravity.js';
 import { AcpDriver } from './acp.js';
 import { agentEnv, which } from '../env.js';
 import { probe } from './probe.js';
@@ -27,8 +26,7 @@ export const AGENTS = [
     fallback: () => newest(path.join(homedir(), 'Library/Application Support/Claude/claude-code/*/*/claude.app/Contents/MacOS/claude')) },
   { id: 'codex', name: 'Codex', color: '#3f8f78', kind: 'codex', bins: ['codex'], install: 'npm install -g @openai/codex', login: ['login'], statusArgs: ['login', 'status'],
     fallback: () => ['/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex', '/Applications/Codex.app/Contents/Resources/codex'].find((f) => fs.existsSync(f)) },
-  { id: 'antigravity', name: 'Antigravity', about: 'Gemini models, with your Google account', bin: '.local/bin/agy', color: '#4a7fd6', aliases: ['agy'], kind: 'antigravity', bins: ['agy'], install: 'curl -fsSL https://antigravity.google/cli/install.sh | bash', login: [] },
-  acp('gemini', 'Gemini CLI', '#7a6fd0', ['gemini'], ['--acp'], { install: 'npm install -g @google/gemini-cli', login: [] }),
+  { id: 'antigravity', name: 'Antigravity', about: 'Gemini models, with your Google account', bin: '.local/bin/agy', color: '#4a7fd6', aliases: ['agy', 'gemini'], kind: 'acp', probe: 'agy', args: ['acp'], bins: ['agy'], install: 'curl -fsSL https://antigravity.google/cli/install.sh | bash', login: [] },
   acp('copilot', 'GitHub Copilot', '#8a6fb0', ['copilot'], ['--acp'], { install: 'npm install -g @github/copilot', login: ['login'] }),
   acp('cursor', 'Cursor', '#7d8590', ['cursor-agent'], ['acp'], { login: ['login'], site: 'https://cursor.com/cli' }),
   acp('opencode', 'OpenCode', '#b0894f', ['opencode'], ['acp'], { install: 'npm install -g opencode-ai', login: ['auth', 'login'] }),
@@ -71,5 +69,5 @@ export async function probeAgent(def, info, version) { return probe(def, info.pa
 
 export async function makeDriver(def, info, version) {
   const o = { path: info.path, args: def.args, env: await agentEnv(), version };
-  return new ({ claude: ClaudeDriver, codex: CodexDriver, antigravity: AntigravityDriver, acp: AcpDriver }[def.kind])(o);
+  return new ({ claude: ClaudeDriver, codex: CodexDriver, acp: AcpDriver }[def.kind])(o);
 }

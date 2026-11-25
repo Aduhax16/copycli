@@ -20,8 +20,8 @@ One chat for all your coding agents. Claude Code, Codex, Antigravity and other a
 | --- | --- | --- |
 | Codex | `codex app-server` | Tested with a real account |
 | Claude Code | `claude` stream-json | Used with a real account |
-| Antigravity | `agy` stream-json | Written from its docs and tested against a simulated CLI. Headless `agy` never asks: what the mode does not allow is refused |
-| Gemini CLI, GitHub Copilot, Cursor, OpenCode, Goose, Qwen Code, Kimi, Grok Build, Cline, Auggie, Kilo, Qoder, Kiro, Devin, Mistral Vibe, Junie, Amp | [Agent Client Protocol](https://agentclientprotocol.com) | Protocol tested with a test agent; launch commands from the ACP registry |
+| Antigravity | `agy acp` | Used with a real account |
+| GitHub Copilot, Cursor, OpenCode, Goose, Qwen Code, Kimi, Grok Build, Cline, Auggie, Kilo, Qoder, Kiro, Devin, Mistral Vibe, Junie, Amp | [Agent Client Protocol](https://agentclientprotocol.com) | Protocol tested with a test agent; launch commands from the ACP registry |
 | Your own | Any ACP command, added in Settings | |
 
 CopyCLI runs each vendor's own command-line app with your own sign-in. It never sees or stores your credentials, and has no server or telemetry. Your plan's limits and each vendor's terms apply.
@@ -46,7 +46,6 @@ Then open **Settings → Agents** (⌘,) to install agents or sign in.
 - Agents run on your computer with your permissions. In Full access they can run anything without asking.
 - All agents work in the same folder. File claims are cooperative: they reduce conflicts but do not lock files. Changes made by shell commands are not tracked.
 - Web pages can carry text meant to trick agents. The browser asks per site, but read what you approve.
-- Antigravity reads MCP servers from its own config file, so its browser and team tools are off until you turn them on in Settings → Agents.
 - Codex runs without its own plugins unless you turn them on, and at low effort by default, to use less of your limit.
 - If a third-party script or style never answers, the browser loads the page without it.
 - The app is not notarized by Apple.

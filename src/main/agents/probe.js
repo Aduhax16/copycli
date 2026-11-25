@@ -9,8 +9,19 @@ export function codexUsage(r) {
   const w = (x) => (x ? { usedPercent: Math.round(x.usedPercent), resetsAt: x.resetsAt, minutes: x.windowDurationMins } : null);
   return r ? [w(r.primary), w(r.secondary)].filter(Boolean) : [];
 }
+// `agy models` lists each model once per thinking level; show the model once and its levels as effort.
 export function parseAgyModels(text) {
-  return text.split('\n').map((l) => /^[\s*•-]*([a-z][a-z0-9]*(?:[-.][a-z0-9.]+)+)\b/.exec(l)?.[1]).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).map((id) => ({ id, name: id, efforts: [] }));
+  const out = new Map();
+  for (const l of text.split('\n')) {
+    const m = /^\s*([a-z][a-z0-9]*(?:[-.][a-z0-9.]+)+)\s+(\S.*)$/.exec(l);
+    if (!m) continue;
+    const [, base, level] = /^(.*?)(?:-(low|medium|high|xhigh))?$/.exec(m[1]);
+    const x = out.get(base) || { id: base, name: m[2].replace(/\s*\((Low|Medium|High|XHigh)\)\s*$/, '').trim(), efforts: [] };
+    if (level) x.efforts.push(level);
+    out.set(base, x);
+  }
+  const rank = ['low', 'medium', 'high', 'xhigh'];
+  return [...out.values()].map((x) => ({ ...x, efforts: rank.filter((r) => x.efforts.includes(r)) }));
 }
 
 async function codex(path, env, version) {
@@ -44,6 +55,6 @@ async function claude(path, env) {
 const agy = (path, env) => new Promise((r) => execFile(path, ['models'], { env, timeout: 15000 }, (_e, out) => r({ models: parseAgyModels(out || '') })));
 
 export async function probe(def, path, env, version) {
-  const f = { codex, claude, antigravity: agy }[def.kind];
+  const f = { codex, claude, agy }[def.probe || def.kind];
   return f ? f(path, env, version) : {};
 }

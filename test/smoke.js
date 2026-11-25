@@ -70,6 +70,7 @@ export async function smoke({ win, orch, browser, mcp, store }) {
       c.mode = 'edit'; c.sites.push(new URL(url).host);
       await ui(`document.querySelector('.chat .open').click()`);
       await sleep(500);
+      store.settings.efforts[id] = 'low';
       if (process.env.COPYCLI_MODEL) store.settings.models[id] = process.env.COPYCLI_MODEL;
       await until(() => orch.models(id).length, 20000, 'models');
       console.log('models:', orch.models(id).map((m) => m.id).join(', '), '| limits', JSON.stringify(orch.windows(id).map((w) => w.usedPercent)));
@@ -82,7 +83,7 @@ export async function smoke({ win, orch, browser, mcp, store }) {
       assert.equal(fs.readFileSync(path.join(dir, 'word.txt'), 'utf8').trim(), 'pineapple');
       orch.send(c.id, 'In one word: what did you write in the file?', [id]);
       await until(() => !orch.live.size, 120000, 'second turn');
-      console.log('resume:', c.messages.at(-1).parts.map((p) => p.text).join(''));
+      console.log('resume:', c.messages.at(-1).parts.map((p) => p.text).join(''), JSON.stringify(c.messages.at(-1).usage));
       await sleep(600);
       await shot('live');
       console.log('live agent: ok');

@@ -103,7 +103,7 @@ function place(m) {
 const userCard = (m) => h('div', { class: 'user' }, h('div', { class: 'to' }, `To ${m.targets.map((t) => agent(t).name).join(', ')}`), h('div', { class: 'bubble' }, m.text));
 const sysCard = (m) => h('div', { class: `sys ${m.level || ''}` }, m.text);
 const tok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n || 0));
-const spend = (m) => { const u = m.usage; const bits = []; if (u) bits.push(`${tok((u.fresh || 0) + (u.output || 0))} tokens`, u.cached ? `${tok(u.cached)} cached` : '', u.calls ? `${u.calls} calls` : ''); if (m.spent) bits.push(`${m.spent}% of limit`); return bits.filter(Boolean).join(' · '); };
+const spend = (m) => { const u = m.usage; const bits = []; if (u) bits.push(`${tok(u.fresh)} new`, u.cached ? `${tok(u.cached)} reused` : '', `${tok(u.output)} written`, u.calls ? `${u.calls} calls` : ''); if (m.spent) bits.push(`${m.spent}% of limit`); return bits.filter(Boolean).join(' · '); };
 const span = (min) => (min >= 10080 ? 'week' : min >= 60 ? `${Math.round(min / 60)} h` : `${min} min`);
 const STATE = { running: 'Working', paused: 'Paused', limit: 'Out of usage', error: 'Stopped', cancelled: 'Stopped by you' };
 function agentCard(m, keep = new Set()) {
@@ -125,7 +125,7 @@ function agentCard(m, keep = new Set()) {
   const more = h('select', { 'aria-label': 'Continue with another agent', onchange: (e) => { if (e.target.value) go('continue', chat.id, m.id, e.target.value); e.target.value = ''; } }, h('option', { value: '' }, 'Continue with…'), others.map((o) => h('option', { value: o.id }, o.name)));
   return h('article', { class: `agent${m.note ? ' note' : ''}` },
     h('header', {}, dot(m.agentId, live), a.name, h('span', { class: `state ${m.status}` }, m.note ? 'Note to the team' : STATE[m.status] || ''), h('span', { class: 'grow' }), live ? h('button', { class: 'quiet', onclick: () => go('stop', chat.id, m.agentId) }, 'Stop') : null, m.status === 'paused' ? h('button', { onclick: () => go('continue', chat.id, m.id, m.agentId) }, 'Continue') : null, live ? null : !m.note && others.length && m.status !== 'done' ? more : null),
-    body, m.files?.length ? h('div', { class: 'files' }, `Changed ${m.files.join(', ')}`) : null, spend(m) ? h('div', { class: 'files spend' }, spend(m)) : null);
+    body, m.files?.length ? h('div', { class: 'files' }, `Changed ${m.files.join(', ')}`) : null, spend(m) ? h('div', { class: 'files spend', title: 'Tokens. New: read for the first time. Reused: read again from cache, at a lower cost. Written: the answer, including thinking. Each company counts tokens its own way.' }, spend(m)) : null);
 }
 
 // ---- composer ----
