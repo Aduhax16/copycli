@@ -1,1 +1,99 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><rect x="100" y="100" width="824" height="824" rx="186" fill="#202226"/><g fill="none" stroke-width="62" stroke-linecap="round"><path d="M290 330C470 330 480 512 640 512" stroke="#d97757"/><path d="M290 512H640" stroke="#4fae91"/><path d="M290 694C470 694 480 512 640 512" stroke="#5b8fe6"/></g><circle cx="690" cy="512" r="84" fill="#f2f1ee"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="160" y1="100" x2="860" y2="924" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#25232a"/>
+      <stop offset="55%" stop-color="#17161b"/>
+      <stop offset="100%" stop-color="#0f0f12"/>
+    </linearGradient>
+    <radialGradient id="bgGlow" cx="50%" cy="32%" r="65%">
+      <stop offset="0%" stop-color="#ff3b5c" stop-opacity="0.14"/>
+      <stop offset="100%" stop-color="#0f0f12" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="512" y1="100" x2="512" y2="924" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="28%" stop-color="#ffffff" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.35"/>
+    </linearGradient>
+
+    <radialGradient id="cherryR" cx="38%" cy="28%" r="72%" fx="34%" fy="24%">
+      <stop offset="0%" stop-color="#ff6682"/>
+      <stop offset="32%" stop-color="#e31d41"/>
+      <stop offset="72%" stop-color="#9e0b27"/>
+      <stop offset="100%" stop-color="#5c0516"/>
+    </radialGradient>
+    <radialGradient id="cherryL" cx="35%" cy="26%" r="74%" fx="31%" fy="22%">
+      <stop offset="0%" stop-color="#ff748e"/>
+      <stop offset="30%" stop-color="#ef2347"/>
+      <stop offset="72%" stop-color="#a80d2a"/>
+      <stop offset="100%" stop-color="#640618"/>
+    </radialGradient>
+
+    <linearGradient id="shine" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.88"/>
+      <stop offset="55%" stop-color="#ffd1dc" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+
+    <linearGradient id="stemGrad" x1="380" y1="520" x2="590" y2="220" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#438730"/>
+      <stop offset="55%" stop-color="#6cc24a"/>
+      <stop offset="100%" stop-color="#9ae068"/>
+    </linearGradient>
+    <linearGradient id="leafTop" x1="310" y1="220" x2="555" y2="335" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#a8ee70"/>
+      <stop offset="60%" stop-color="#5db83e"/>
+      <stop offset="100%" stop-color="#3a8528"/>
+    </linearGradient>
+    <linearGradient id="leafBot" x1="330" y1="300" x2="555" y2="340" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#4ea334"/>
+      <stop offset="100%" stop-color="#22591c"/>
+    </linearGradient>
+    <filter id="drop" x="-15%" y="-15%" width="130%" height="135%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <!-- macOS squircle base -->
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bgGlow)"/>
+  <rect x="102" y="102" width="820" height="820" rx="184" fill="none" stroke="url(#rim)" stroke-width="4"/>
+
+  <g filter="url(#drop)">
+    <!-- Sculpted emerald leaf -->
+    <path d="M552 252 C492 206, 396 208, 326 264 C378 326, 474 344, 552 252 Z" fill="url(#leafTop)"/>
+    <path d="M552 252 C474 344, 378 326, 326 264 C394 274, 478 274, 552 252 Z" fill="url(#leafBot)"/>
+    <path d="M342 265 C410 268, 482 264, 548 252" fill="none" stroke="#c8f79c" stroke-opacity="0.65" stroke-width="7" stroke-linecap="round"/>
+
+    <!-- Twin curved stems -->
+    <path d="M398 518 C406 392, 466 304, 554 252" fill="none" stroke="url(#stemGrad)" stroke-width="26" stroke-linecap="round"/>
+    <path d="M614 474 C606 376, 588 308, 554 252" fill="none" stroke="url(#stemGrad)" stroke-width="24" stroke-linecap="round"/>
+    <!-- Subtle stem specular highlight -->
+    <path d="M402 496 C414 388, 468 308, 548 256" fill="none" stroke="#d0faaa" stroke-opacity="0.45" stroke-width="6" stroke-linecap="round"/>
+    <path d="M608 456 C602 372, 585 310, 556 260" fill="none" stroke="#d0faaa" stroke-opacity="0.38" stroke-width="5" stroke-linecap="round"/>
+    <!-- Stem junction knot -->
+    <path d="M542 258 C552 240, 570 226, 592 222" fill="none" stroke="#85d457" stroke-width="28" stroke-linecap="round"/>
+
+    <!-- Right cherry (back) -->
+    <path d="M616 462 C682 450, 766 502, 768 594 C770 688, 700 756, 616 754 C534 752, 470 684, 474 592 C478 504, 552 454, 616 462 Z" fill="url(#cherryR)"/>
+    <!-- Right cherry top dimple -->
+    <ellipse cx="614" cy="482" rx="44" ry="16" fill="#4f0413" opacity="0.52"/>
+    <!-- Right cherry specular highlight -->
+    <path d="M522 572 C522 524, 556 490, 600 486 C568 504, 546 534, 540 578 C537 594, 522 590, 522 572 Z" fill="url(#shine)"/>
+    <circle cx="536" cy="616" r="10" fill="#ffffff" opacity="0.45"/>
+    <!-- Right cherry warm rim bounce -->
+    <path d="M578 730 C642 742, 712 706, 738 646" fill="none" stroke="#ff7a96" stroke-opacity="0.28" stroke-width="12" stroke-linecap="round"/>
+
+    <!-- Soft shadow cast by left cherry onto right cherry -->
+    <ellipse cx="524" cy="642" rx="52" ry="92" fill="#210208" opacity="0.36" transform="rotate(-10 524 642)"/>
+
+    <!-- Left cherry (front) -->
+    <path d="M398 506 C468 494, 552 548, 554 644 C556 738, 484 806, 396 804 C308 802, 240 734, 244 640 C248 548, 326 496, 398 506 Z" fill="url(#cherryL)"/>
+    <!-- Left cherry top dimple -->
+    <ellipse cx="398" cy="526" rx="46" ry="17" fill="#520414" opacity="0.55"/>
+    <!-- Left cherry glossy highlight crescent + sparkle dot -->
+    <path d="M294 618 C294 566, 332 530, 380 526 C346 546, 322 578, 314 626 C311 642, 294 638, 294 618 Z" fill="url(#shine)"/>
+    <circle cx="310" cy="666" r="12" fill="#ffffff" opacity="0.55"/>
+    <!-- Left cherry warm rim bounce -->
+    <path d="M350 778 C416 792, 492 754, 520 692" fill="none" stroke="#ff829c" stroke-opacity="0.32" stroke-width="13" stroke-linecap="round"/>
+  </g>
+</svg>

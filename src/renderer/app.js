@@ -33,6 +33,7 @@ function icon(name) {
   return svg;
 }
 document.querySelectorAll('[data-icon]').forEach((e) => e.replaceWith(icon(e.dataset.icon)));
+const brandLogo = () => h('img', { src: 'logo.svg', alt: '', class: 'logo-img' });
 const readyBadges = () => h('div', { class: 'ready-agents', 'aria-label': 'Available agents' }, ready().map((a) => h('span', { class: 'ready-agent' }, dot(a.id), a.name)));
 function starter(name, detail, glyph, prompt) {
   return h('button', { class: 'starter', onclick: () => { $('input').value = prompt; fit(); $('input').focus(); } }, icon(glyph), h('span', {}, name, h('small', {}, detail)));
@@ -76,7 +77,7 @@ function drawChat() {
     agentStatus.render(null);
     const n = ready();
     $('log').replaceChildren(h('div', { class: 'empty' },
-      h('div', { class: 'welcome-mark' }, icon('layers')),
+      h('div', { class: 'welcome-mark' }, brandLogo()),
       h('div', { class: 'eyebrow' }, 'One workspace. Your agents.'),
       h('h1', {}, 'Good work starts here.'),
       h('p', {}, n.length ? 'Bring your coding agents together. One conversation, a shared folder, and room to build.' : 'Connect your first coding agent in Settings, then choose a folder to start building.'),
@@ -88,7 +89,7 @@ function drawChat() {
   $('log').replaceChildren();
   chat.messages.forEach(place);
   if (!chat.messages.length) $('log').append(h('div', { class: 'empty' },
-    h('div', { class: 'welcome-mark' }, icon('layers')), h('div', { class: 'eyebrow' }, 'Your next idea starts here'),
+    h('div', { class: 'welcome-mark' }, brandLogo()), h('div', { class: 'eyebrow' }, 'Your next idea starts here'),
     h('h1', {}, 'What are we building?'), h('p', {}, 'Pick your agents below. Give them one goal or a task each — they’ll work together in this folder.'),
     h('div', { class: 'starter-grid' },
       starter('Build something', 'Turn an idea into working code', 'code', 'Help me build '),
