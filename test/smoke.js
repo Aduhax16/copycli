@@ -90,10 +90,14 @@ export async function smoke({ win, orch, browser, mcp, store }) {
     }
     // Several agents in one chat: layout, approvals, markup safety.
     {
+      // These checks need three agents; computers without them (CI) get stand-ins that are never run.
+      for (const id of ['claude', 'codex', 'antigravity']) if (!orch.usable().some((a) => a.id === id)) orch.status.set(id, { installed: true, path: '/usr/bin/false', signedIn: true });
+      orch.emit('agents', orch.agents());
       const c = orch.createChat({ cwd: os.tmpdir() });
       c.title = 'Landing page';
       orch.emit('chats', orch.listChats());
       orch.updateChat(c.id, {});
+      await until(() => ui(`document.querySelector('.chat .open')?.textContent.includes('Landing page')`), 3000, 'chat list');
       await ui(`document.querySelector('.chat .open').click()`);
       await sleep(400);
       const round = 'r1', add = (m) => orch.push(c, m);
@@ -142,6 +146,7 @@ export async function smoke({ win, orch, browser, mcp, store }) {
       }
       // Opening another chat clears the previous chat's strip; returning restores it.
       const blank = orch.createChat({ cwd: os.tmpdir() });
+      await until(() => ui(`document.querySelectorAll('.chat .open').length === 2`), 3000, 'second chat');
       await ui(`document.querySelectorAll('.chat .open')[0].click()`);
       await until(() => ui(`document.getElementById('agent-status').hidden`), 2000, 'empty chat status');
       assert.deepEqual(await statuses(), {});
