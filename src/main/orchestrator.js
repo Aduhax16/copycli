@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { allAgents, detect, makeDriver, probeAgent } from './agents/registry.js';
+import { allAgents, detect, makeDriver, probeAgent, probeAgentUsage } from './agents/registry.js';
 import { parseMentions, catchUp, instructionsFor, buildPrompt, renderMessage } from './context.js';
 import { BROWSER_TOOLS, normalizeUrl } from './browser-tools.js';
 import { isContent } from './mcp.js';
@@ -12,11 +12,15 @@ export const TOOLS = [...TEAM_TOOLS, ...BROWSER_TOOLS];
 const READ_ONLY = new Set(['browser_open', 'browser_read', 'browser_find', 'browser_screenshot', 'browser_scroll', 'browser_back', 'browser_console', 'browser_tabs']);
 
 export class Orchestrator {
-  constructor({ store, emit, version, bridge, driverFactory, detector, prober }) {
+  constructor({ store, emit, version, bridge, driverFactory, detector, prober, usageProber }) {
     Object.assign(this, { store, emit, version, bridge });
     this.makeDriver = driverFactory || ((d, i) => makeDriver(d, i, version));
     this.detect = detector || detect;
     this.probe = prober || (detector ? async () => ({}) : (d, i) => probeAgent(d, i, version));
+    this.probeUsage = usageProber || (detector || prober ? async () => ({}) : (d, i) => probeAgentUsage(d, i, version));
+    this.quotaReads = new Map();
+    this.usageUpdated = new Map();
+    this.usageQueried = new Map();
     this.info = new Map();     // agentId -> { models, defaultModel }
     this.usage = new Map();    // agentId -> [{ usedPercent, resetsAt, minutes }]
     this.status = new Map();   // agentId -> detection
@@ -41,7 +45,7 @@ export class Orchestrator {
       const p = await this.probe(d, s).catch(() => null);
       if (!p) return;
       if (p.models?.length) this.info.set(d.id, { models: p.models, defaultModel: p.defaultModel || null });
-      if (p.usage?.length) this.usage.set(d.id, p.usage);
+      if (Array.isArray(p.usage)) this.recordUsage(d.id, p.usage);
       this.emit('agents', this.agents());
     }));
     return this.agents();
@@ -55,14 +59,53 @@ export class Orchestrator {
     const m = this.models(id).find((x) => x.id === model);
     return !m || m.efforts.includes(e) ? e : '';
   }
-  windows(id) { return (this.usage.get(id) || []).filter((w) => !w.resetsAt || w.resetsAt * 1000 > Date.now()); }
+  recordUsage(id, windows, partial = false) {
+    const good = windows.filter((w) => Number.isFinite(w.usedPercent)).map((w) => ({ ...w, usedPercent: Math.max(0, Math.min(100, w.usedPercent)) }));
+    if (partial && !good.length) return;
+    const key = (w) => w.id || `${w.scope || ''}:${w.minutes}`;
+    const all = new Map((partial ? this.usage.get(id) || [] : []).map((w) => [key(w), w]));
+    for (const w of good) all.set(key(w), { ...all.get(key(w)), ...w });
+    this.usage.set(id, [...all.values()]);
+    this.usageUpdated.set(id, Date.now());
+    if (!partial) this.usageQueried.set(id, Date.now());
+  }
+  allWindows(id) {
+    if (this.usageUpdated.has(id) && Date.now() - this.usageUpdated.get(id) > 15 * 60e3) return [];
+    return (this.usage.get(id) || []).filter((w) => Number.isFinite(w.usedPercent) && (!w.resetsAt || w.resetsAt * 1000 > Date.now()));
+  }
+  windows(id) {
+    const model = (this.store.settings.models[id] || this.info.get(id)?.defaultModel || '').toLowerCase();
+    const scope = id === 'antigravity' && model ? /claude|gpt/.test(model) ? 'third-party' : 'gemini' : null;
+    return this.allWindows(id).filter((w) => !w.scope || (id === 'antigravity' ? !scope || w.scope === scope : model.includes(w.scope)));
+  }
+  async refreshUsage(id, force = false) {
+    const ids = id ? [id] : this.defs.filter((d) => d.kind === 'claude' || d.kind === 'codex' || d.probe === 'agy').map((d) => d.id);
+    await Promise.all(ids.map((agentId) => {
+      if (this.quotaReads.has(agentId)) return this.quotaReads.get(agentId);
+      const def = this.def(agentId), status = this.status.get(agentId);
+      if (!status?.installed || status.signedIn === false || (!force && Date.now() - (this.usageQueried.get(agentId) || 0) < 60000)) return;
+      const job = Promise.resolve().then(async () => {
+        try {
+          const result = await this.probeUsage(def, status);
+          if (Array.isArray(result.usage)) {
+            this.recordUsage(agentId, result.usage);
+          }
+        } catch {} finally {
+          this.quotaReads.delete(agentId);
+          this.emit('usage', { agentId, usage: this.windows(agentId), usageDetails: this.allWindows(agentId), usageUpdatedAt: this.usageUpdated.get(agentId) });
+        }
+      });
+      this.quotaReads.set(agentId, job);
+      return job;
+    }));
+  }
   // How full the fullest window is.
   used(id) { const w = this.windows(id); return w.length ? Math.max(...w.map((x) => x.usedPercent)) : null; }
   dropDrivers(agentId) { for (const [k, d] of this.drivers) if (k.endsWith(`/${agentId}`) && !this.live.has(k)) { this.drivers.delete(k); d.then((x) => x.dispose()).catch(() => {}); } }
   agents() {
     const { order, disabled, models } = this.store.settings;
     const rank = (id) => { const i = order.indexOf(id); return i < 0 ? 99 : i; };
-    return this.defs.map((d) => ({ id: d.id, name: d.name, color: d.color, kind: d.kind, custom: !!d.custom, aliases: d.aliases || [], install: d.install || null, site: d.site || null, canLogin: !!d.login, about: d.about || '', installed: false, ...this.status.get(d.id), enabled: !disabled.includes(d.id), model: models[d.id] || '', effort: this.store.settings.efforts[d.id] || '', models: this.models(d.id), defaultModel: this.info.get(d.id)?.defaultModel || null, usage: this.windows(d.id), limitedUntil: (this.limited.get(d.id) || 0) > Date.now() ? this.limited.get(d.id) : null }))
+    return this.defs.map((d) => ({ id: d.id, name: d.name, color: d.color, kind: d.kind, custom: !!d.custom, aliases: d.aliases || [], handle: d.handle && !this.def(d.handle) ? d.handle : d.id, install: d.install || null, site: d.site || null, canLogin: !!d.login, about: d.about || '', installed: false, ...this.status.get(d.id), enabled: !disabled.includes(d.id), model: models[d.id] || '', effort: this.store.settings.efforts[d.id] || '', models: this.models(d.id), defaultModel: this.info.get(d.id)?.defaultModel || null, usage: this.windows(d.id), usageDetails: this.allWindows(d.id), usageUpdatedAt: this.usageUpdated.get(d.id) || null, limitedUntil: (this.limited.get(d.id) || 0) > Date.now() ? this.limited.get(d.id) : null }))
       .sort((a, b) => rank(a.id) - rank(b.id));
   }
   usable() { return this.agents().filter((a) => a.installed && a.enabled && a.signedIn !== false); }
@@ -162,7 +205,7 @@ export class Orchestrator {
       else if (e.type === 'session-lost') { st.seen = []; }
       else if (e.type === 'usage') { const { type: _t, ...u } = e; msg.usage = { ...msg.usage, ...u }; }
       else if (e.type === 'models') { this.store.settings.modelLists[job.id] = e.models; this.store.saveSettings(); this.emit('agents', this.agents()); return; }
-      else if (e.type === 'limits') { if (e.info.windows?.length) { this.usage.set(job.id, e.info.windows); this.guard(turn); this.emit('usage', { agentId: job.id, usage: this.windows(job.id) }); } return; }
+      else if (e.type === 'limits') { if (e.info.windows?.length) { this.recordUsage(job.id, e.info.windows, e.info.partial); this.guard(turn); this.emit('usage', { agentId: job.id, usage: this.windows(job.id), usageDetails: this.allWindows(job.id), usageUpdatedAt: this.usageUpdated.get(job.id) }); } return; }
       touch();
     };
     let r;
@@ -197,13 +240,14 @@ export class Orchestrator {
     if (next && !this.live.has(k)) this.enqueue(chat, next);
     this.emit('agents', this.agents());
     this.emit('chats', this.listChats());
+    this.refreshUsage(job.id, true);
   }
 
   // ---- usage guard ----
   // Percent of the fullest shared window used since this turn began. Windows that reset start over.
   spent(turn) {
     const now = this.windows(turn.agentId), was = turn.startUsage || [];
-    const d = now.map((w) => { const o = was.find((x) => x.minutes === w.minutes && Math.abs((x.resetsAt || 0) - (w.resetsAt || 0)) < 120); return o ? Math.max(0, w.usedPercent - o.usedPercent) : 0; });
+    const d = now.map((w) => { const o = was.find((x) => (w.id && x.id ? w.id === x.id : x.minutes === w.minutes && x.scope === w.scope) && Math.abs((x.resetsAt || 0) - (w.resetsAt || 0)) < 120); return o ? Math.max(0, w.usedPercent - o.usedPercent) : 0; });
     return d.length ? Math.max(...d) : null;
   }
   guard(turn) {

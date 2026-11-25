@@ -1,5 +1,7 @@
+import { remainingPercent, quotaTooltip } from '../shared/usage.js';
 import { markdown } from './markdown.js';
 import { createSettings } from './settings.js';
+import { createAgentStatus } from './agent-status.js';
 const $ = (id) => document.getElementById(id);
 const h = (tag, props = {}, ...kids) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(props)) { if (v === undefined || v === null || v === false) continue; if (k.startsWith('on')) e[k] = v; else if (k === 'class') e.className = v; else if (k === 'c') e.style.setProperty('--c', v); else if (k in e && k !== 'list') e[k] = v; else e.setAttribute(k, v); } e.append(...kids.flat().filter((x) => x !== null && x !== undefined && x !== false)); return e; };
 let agents = [], chats = [], chat = null, approvals = [], tabs = { tabs: [], active: null }, settings = {}, home = '', version = '';
@@ -59,11 +61,19 @@ async function newChat() { const c = await call('chat:new'); if (c) open(c.id); 
 
 // ---- chat ----
 const cards = new Map();
+const agentStatus = createAgentStatus({
+  root: $('agent-status'),
+  h,
+  agent,
+  dot,
+  onSelect: (id) => cards.get(id)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }),
+});
 function drawChat() {
   cards.clear();
   for (const x of ['title', 'folder', 'composer', 'composer-hint']) $(x).hidden = !chat;
   composerHint();
   if (!chat) {
+    agentStatus.render(null);
     const n = ready();
     $('log').replaceChildren(h('div', { class: 'empty' },
       h('div', { class: 'welcome-mark' }, icon('layers')),
@@ -83,7 +93,7 @@ function drawChat() {
     h('div', { class: 'starter-grid' },
       starter('Build something', 'Turn an idea into working code', 'code', 'Help me build '),
       starter('Explore this project', 'Understand the code and structure', 'search', 'Explore this project and explain its structure and how to run it.'))));
-  drawTargets(); drawApprovals();
+  drawTargets(); drawApprovals(); agentStatus.render(chat);
 }
 function place(m) {
   $('log').querySelector('.empty')?.remove();
@@ -132,10 +142,10 @@ function agentCard(m, keep = new Set()) {
 function drawTargets() {
   const r = ready();
   if (![...picked].some((id) => r.some((a) => a.id === id)) && r[0]) picked = new Set([r[0].id]);
-  $('targets').replaceChildren(...r.map((a) => h('button', { type: 'button', class: 'chip', c: a.color, 'aria-pressed': String(picked.has(a.id)), onclick: () => { picked.has(a.id) ? picked.delete(a.id) : picked.add(a.id); localStorage.picked = JSON.stringify([...picked]); drawTargets(); } }, dot(a.id), a.name, a.limitedUntil ? h('span', { class: 'lim' }, 'limit') : a.usage.length ? h('span', { class: Math.max(...a.usage.map((u) => u.usedPercent)) >= 80 ? 'lim' : 'pct', title: usageText(a) }, `${Math.max(...a.usage.map((u) => u.usedPercent))}%`) : null)), ...(r.length ? [] : [h('button', { type: 'button', onclick: () => prefs.open('agents') }, 'Set up an agent')]));
+  $('targets').replaceChildren(...r.map((a) => h('button', { type: 'button', class: 'chip', c: a.color, 'aria-pressed': String(picked.has(a.id)), onclick: () => { picked.has(a.id) ? picked.delete(a.id) : picked.add(a.id); localStorage.picked = JSON.stringify([...picked]); drawTargets(); } }, dot(a.id), a.name, a.limitedUntil ? h('span', { class: 'lim' }, 'limit') : h('span', { class: remainingPercent(a.usage) !== null && remainingPercent(a.usage) <= 20 ? 'lim' : 'pct', title: quotaTooltip(a), 'aria-label': `${a.name}: ${remainingPercent(a.usage) === null ? 'remaining quota unavailable' : `${remainingPercent(a.usage)}% remaining`}` }, remainingPercent(a.usage) === null ? '—' : `${remainingPercent(a.usage)}% left`))), ...(r.length ? [] : [h('button', { type: 'button', onclick: () => prefs.open('agents') }, 'Set up an agent')]));
   $('models').replaceChildren(...r.filter((a) => picked.has(a.id) && a.models.length).map((a) => h('span', { class: 'mset' }, r.filter((x) => picked.has(x.id)).length > 1 ? h('span', { class: 'dim' }, a.name) : null, ...pickers(a))));
 }
-const usageText = (a) => a.usage.map((u) => `${u.usedPercent}% of the ${span(u.minutes)} limit${u.resetsAt ? `, resets ${new Date(u.resetsAt * 1000).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}`).join(' · ');
+
 // Model and effort menus for one agent, used under the message box and in Settings.
 function pickers(a) {
   const def = a.models.find((m) => m.id === a.defaultModel)?.name || a.defaultModel;
@@ -155,21 +165,21 @@ async function send() {
 let mIdx = 0;
 function mentions() {
   const i = $('input'), m = /(^|[\s(,])@(\w*)$/.exec(i.value.slice(0, i.selectionStart));
-  const list = m ? ready().filter((a) => a.id.startsWith(m[2].toLowerCase()) || a.name.toLowerCase().startsWith(m[2].toLowerCase())) : [];
-  if (m && ready().length > 1 && 'all'.startsWith(m[2].toLowerCase())) list.push({ id: 'all', name: 'All', color: '#888' });
+  const list = m ? ready().filter((a) => [a.handle, a.id, a.name.toLowerCase(), ...a.aliases].some((n) => n.startsWith(m[2].toLowerCase()))) : [];
+  if (m && ready().length > 1 && 'all'.startsWith(m[2].toLowerCase())) list.push({ id: 'all', handle: 'all', name: 'All', color: '#888' });
   $('mentions').hidden = !list.length;
   mIdx = Math.min(mIdx, Math.max(0, list.length - 1));
-  $('mentions').replaceChildren(...list.map((a, k) => h('button', { type: 'button', class: k === mIdx ? 'on' : '', onmousedown: (e) => { e.preventDefault(); pick(a.id, m); } }, h('span', { class: 'dot', c: a.color }), a.name, h('span', { class: 'dim' }, `@${a.id}`))));
+  $('mentions').replaceChildren(...list.map((a, k) => h('button', { type: 'button', class: k === mIdx ? 'on' : '', onmousedown: (e) => { e.preventDefault(); pick(a.handle, m); } }, h('span', { class: 'dot', c: a.color }), a.name, h('span', { class: 'dim' }, `@${a.handle}`))));
   return { list, m };
 }
-function pick(id, m) { const i = $('input'), s = i.selectionStart; i.setRangeText(`@${id} `, s - m[2].length - 1, s, 'end'); mIdx = 0; mentions(); }
+function pick(handle, m) { const i = $('input'), s = i.selectionStart; i.setRangeText(`@${handle} `, s - m[2].length - 1, s, 'end'); mIdx = 0; mentions(); }
 $('input').addEventListener('input', () => { fit(); mentions(); });
 $('input').addEventListener('keydown', (e) => {
   if (e.isComposing) return;
   if (!$('mentions').hidden) {
     const { list, m } = mentions();
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); mIdx = (mIdx + (e.key === 'ArrowDown' ? 1 : list.length - 1)) % list.length; mentions(); return; }
-    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pick(list[mIdx].id, m); return; }
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pick(list[mIdx].handle, m); return; }
     if (e.key === 'Escape') { $('mentions').hidden = true; return; }
   }
   if (e.key === 'Enter' && (settings.sendKey === 'mod' ? e.metaKey || e.ctrlKey : !e.shiftKey)) { e.preventDefault(); send().catch(() => {}); }
@@ -224,16 +234,17 @@ document.addEventListener('click', (e) => { const a = e.target.closest('a[href]'
 
 // ---- events ----
 window.deck.on((ch, d) => {
-  if (ch === 'agents') { agents = d; if (chat) drawTargets(); else drawChat(); prefs.refresh(); drawWeb(); }
+  if (ch === 'agents') { agents = d; if (chat) { drawTargets(); agentStatus.render(chat); } else drawChat(); prefs.refresh(); drawWeb(); }
   if (ch === 'chats') { chats = d; const c = chats.find((x) => x.id === chat?.id); if (c && document.activeElement !== $('title')) $('title').value = c.title; drawChats(); }
   if (ch === 'message' && d.chatId === chat?.id) {
     const log = $('log'), atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 90;
     const i = chat.messages.findIndex((m) => m.id === d.message.id);
     if (i < 0) chat.messages.push(d.message); else chat.messages[i] = d.message;
     place(d.message);
+    agentStatus.render(chat);
     if (atEnd || d.message.role === 'user') log.scrollTop = 1e9;
   }
-  if (ch === 'usage') { const a = agents.find((x) => x.id === d.agentId); if (a) { a.usage = d.usage; if (chat) drawTargets(); prefs.refresh(); } }
+  if (ch === 'usage') { const a = agents.find((x) => x.id === d.agentId); if (a) { a.usage = d.usage; a.usageDetails = d.usageDetails || d.usage; a.usageUpdatedAt = d.usageUpdatedAt; if (chat) drawTargets(); prefs.refresh(); } }
   if (ch === 'approval') { approvals.push(d); drawApprovals(); if (d.chatId !== chat?.id) toast(`${agent(d.agentId).name} needs your approval in another chat`); }
   if (ch === 'approval-done') { approvals = approvals.filter((a) => a.id !== d.id); drawApprovals(); }
   if (ch === 'browser:state') { tabs = d; drawWeb(); }

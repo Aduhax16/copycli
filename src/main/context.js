@@ -3,7 +3,9 @@
 // `agents` are all known agents; `ready` are the ids @all stands for.
 export function parseMentions(text, agents, ready = agents.map((a) => a.id)) {
   const names = new Map([['all', 'all'], ['everyone', 'all']]);
-  for (const a of agents) for (const n of [a.id, ...(a.aliases || []), a.name.replace(/\s+/g, '')]) names.set(n.toLowerCase(), a.id);
+  // An agent's own id always wins over another agent's nickname.
+  for (const a of agents) names.set(a.id.toLowerCase(), a.id);
+  for (const a of agents) for (const n of [a.handle, ...(a.aliases || []), a.name.replace(/\s+/g, '')]) if (n && !names.has(n.toLowerCase())) names.set(n.toLowerCase(), a.id);
   const hits = [];
   for (const m of text.matchAll(/(^|[\s(,])@([a-z][\w-]*)/gi)) {
     const id = names.get(m[2].toLowerCase());

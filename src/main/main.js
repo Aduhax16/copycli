@@ -19,7 +19,7 @@ app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 if (!SMOKE && !app.requestSingleInstanceLock()) app.quit();
 
-let win, store, orch, browser, mcp;
+let win, store, orch, browser, mcp, quotaTimer;
 const emit = (ch, data) => {
   if (!win || win.isDestroyed()) return;
   win.webContents.send('event', { ch, data });
@@ -186,8 +186,9 @@ app.whenReady().then(async () => {
   orch.browser = browser;
   win.on('closed', () => { win = null; app.quit(); });
   await win.loadFile(path.join(here, '../renderer/index.html'));
+  if (!SMOKE) quotaTimer = setInterval(() => orch.refreshUsage(), 120000);
   if (SMOKE) { win.showInactive(); const { smoke } = await import('../../test/smoke.js'); await smoke({ win, orch, browser, store, mcp }); }
 });
 app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
-app.on('before-quit', () => orch?.shutdown());
+app.on('before-quit', () => { clearInterval(quotaTimer); orch?.shutdown(); });
 app.on('window-all-closed', () => app.quit());

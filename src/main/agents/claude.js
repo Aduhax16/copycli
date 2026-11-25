@@ -1,3 +1,4 @@
+import { claudeRateUsage } from './quotas.js';
 // Claude Code, driven through its own CLI in stream-json mode.
 import { randomUUID } from 'node:crypto';
 import { spawnJsonl } from './proc.js';
@@ -51,7 +52,7 @@ export class ClaudeDriver {
             }
           } else if (m.type === 'rate_limit_event') {
             rate = m.rate_limit_info;
-            onEvent({ type: 'limits', info: { status: rate?.status, resetsAt: rate?.resetsAt, kind: rate?.rateLimitType, ...(Number.isFinite(rate?.utilization) ? { windows: [{ usedPercent: Math.round(rate.utilization <= 1 ? rate.utilization * 100 : rate.utilization), resetsAt: rate.resetsAt, minutes: rate.rateLimitType === 'five_hour' ? 300 : 10080 }] } : {}) } });
+            onEvent({ type: 'limits', info: { status: rate?.status, resetsAt: rate?.resetsAt, kind: rate?.rateLimitType, partial: true, windows: claudeRateUsage(rate) } });
           } else if (m.type === 'control_request') {
             const r = m.request || {};
             let response = {};

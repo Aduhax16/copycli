@@ -7,6 +7,7 @@
 <title>CopyCLI</title>
 <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="settings.css">
+<link rel="stylesheet" href="agent-status.css">
 </head>
 <body>
 <aside id="side">
@@ -19,7 +20,7 @@
   <div class="sidebar-footer"><span class="dot"></span>Your workspace, connected</div>
 </aside>
 <main id="main">
-  <header id="top"><input id="title" aria-label="Chat title" spellcheck="false"><button id="folder" class="quiet" title="Change folder"></button><span class="grow"></span><button id="browser-btn" class="quiet" title="Show or hide the browser (⌘B)" aria-expanded="false" aria-controls="web"><span data-icon="panel"></span>Browser</button></header>
+  <header id="top"><input id="title" aria-label="Chat title" spellcheck="false"><button id="folder" class="quiet" title="Change folder"></button><span class="grow"></span><div id="agent-status" class="agent-status" role="status" aria-live="polite" aria-label="Agent status" hidden></div><button id="browser-btn" class="quiet" title="Show or hide the browser (⌘B)" aria-expanded="false" aria-controls="web"><span data-icon="panel"></span>Browser</button></header>
   <section id="log" aria-live="polite"></section>
   <section id="approvals" aria-label="Approvals"></section>
   <form id="composer">

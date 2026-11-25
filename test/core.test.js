@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { allAgents } from '../src/main/agents/registry.js';
 import { parseMentions, catchUp, buildPrompt, instructionsFor } from '../src/main/context.js';
 import { isLimitError } from '../src/main/limits.js';
 import { normalizeUrl } from '../src/main/browser-tools.js';
@@ -28,6 +29,18 @@ test('new chats start in the chosen mode, and allowed sites can be removed', () 
   assert.deepEqual(o.sites().map((s) => s.host), ['a.com', 'b.com']);
   o.removeSite(c.id, 'a.com');
   assert.deepEqual(c.sites, ['b.com']);
+});
+test('Antigravity answers to @gemini, and to its old names', () => {
+  const agents = allAgents(), to = (t, a = agents) => parseMentions(t, a).map((j) => j.id);
+  for (const n of ['gemini', 'Gemini', 'antigravity', 'agy']) assert.deepEqual(to(`@${n} check it`), ['antigravity']);
+  assert.deepEqual(to('@claude write it @gemini test it'), ['claude', 'antigravity']);
+  // An agent the user added under that name keeps it.
+  assert.deepEqual(to('@gemini check it', allAgents([{ id: 'gemini', name: 'Gemini', command: 'x' }])), ['gemini']);
+  const { o } = setup({});
+  const handle = (id) => o.agents().find((a) => a.id === id).handle;
+  assert.deepEqual([handle('antigravity'), handle('claude')], ['gemini', 'claude']);
+  o.store.settings.custom.push({ id: 'gemini', name: 'Gemini', command: 'x' });
+  assert.deepEqual([handle('antigravity'), handle('gemini')], ['antigravity', 'gemini']);
 });
 test('mentions split work', () => {
   assert.deepEqual(parseMentions('Build a site. @claude do the html and @codex do the css', A), [{ id: 'claude', task: 'Build a site.\n\ndo the html' }, { id: 'codex', task: 'Build a site.\n\ndo the css' }]);

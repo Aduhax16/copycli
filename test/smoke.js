@@ -107,13 +107,57 @@ export async function smoke({ win, orch, browser, mcp, store }) {
       await sleep(900);
       await shot('multi');
       assert.equal(await ui(`document.querySelectorAll('.round .agent').length`), 3);
+      // Status strip shows mixed outcomes and updates the existing turn in place.
+      const statuses = () => ui(`Object.fromEntries([...document.querySelectorAll('#agent-status .as-pill')].map((e) => [e.dataset.agent, e.dataset.status]))`);
+      assert.deepEqual(await statuses(), { claude: 'limit', codex: 'running', antigravity: 'running' });
+      const codexTurn = c.messages.find((m) => m.role === 'agent' && m.agentId === 'codex');
+      await ui(`window.statusFocusTarget = document.querySelector('.as-pill[data-agent="codex"]'); window.statusFocusTarget.focus()`);
+      orch.touch(c, codexTurn);
+      await sleep(150);
+      assert.equal(await ui(`document.activeElement === window.statusFocusTarget && window.statusFocusTarget.isConnected`), true, 'streaming retains status keyboard focus');
+      codexTurn.status = 'done'; orch.touch(c, codexTurn);
+      await until(async () => (await statuses()).codex === 'done', 2000, 'status done');
+      assert.equal((await statuses()).antigravity, 'running');
+      for (const status of ['paused', 'error', 'cancelled', 'limit', 'running']) {
+        codexTurn.status = status; orch.touch(c, codexTurn);
+        await until(async () => (await statuses()).codex === status, 2000, `status ${status}`);
+      }
+      assert.match(await ui(`document.querySelector('.as-pill[data-agent="codex"]').getAttribute('aria-label')`), /Codex: Working/);
       for (let i = 0; i < 6; i++) add({ role: 'agent', agentId: 'claude', note: true, status: 'done', files: [], parts: [{ type: 'text', text: 'A note for the team' }] });
       await sleep(300);
       assert.ok(await ui(`[...document.querySelectorAll('.agent.note')].every((e) => e.offsetHeight > 40)`), 'notes keep their height');
+      assert.equal((await statuses()).claude, 'limit', 'team notes do not mark an agent done');
       assert.equal(await ui(`document.querySelectorAll('.body img').length + (window.pwned ? 1 : 0)`), 0);
       assert.equal(await ui(`document.querySelectorAll('.ask').length`), 1);
       await ui(`[...document.querySelectorAll('.ask button')].find((b) => b.textContent === 'Deny').click()`);
       await until(() => !orch.approvals.size, 2000, 'deny');
+      // Mentions: the menu offers each agent under its short name.
+      if (orch.usable().some((a) => a.id === 'antigravity')) {
+        await ui(`(() => { const i = document.getElementById('input'); i.focus(); i.value = '@gem'; i.setSelectionRange(4, 4); i.dispatchEvent(new Event('input')); })()`);
+        assert.match(await ui(`document.getElementById('mentions').innerText`), /Antigravity\s*@gemini/);
+        await shot('mentions');
+        await ui(`document.getElementById('input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', cancelable: true, bubbles: true }))`);
+        assert.equal(await ui(`document.getElementById('input').value`), '@gemini ');
+        await ui(`document.getElementById('input').value = ''`);
+      }
+      // Opening another chat clears the previous chat's strip; returning restores it.
+      const blank = orch.createChat({ cwd: os.tmpdir() });
+      await ui(`document.querySelectorAll('.chat .open')[0].click()`);
+      await until(() => ui(`document.getElementById('agent-status').hidden`), 2000, 'empty chat status');
+      assert.deepEqual(await statuses(), {});
+      orch.emit('open-chat', c.id);
+      await until(async () => (await statuses()).claude === 'limit', 2000, 'restored chat status');
+      // Remaining quota is shown for all three providers, not just Codex.
+      const quotaReset = Date.now() / 1000 + 3600;
+      for (const [id, usedPercent] of [['claude', 27], ['codex', 70], ['antigravity', 4]]) orch.recordUsage(id, [{ usedPercent, resetsAt: quotaReset, minutes: 300 }]);
+      orch.emit('agents', orch.agents());
+      await until(() => ui(`document.querySelector('#targets .chip .pct[aria-label="Antigravity: 96% remaining"]') !== null`), 2000, 'all agent quotas');
+      assert.match(await ui(`document.getElementById('targets').innerText`), /73% left/);
+      assert.match(await ui(`document.getElementById('targets').innerText`), /30% left/);
+      const savedQuota = orch.usage.get('antigravity');
+      orch.usage.delete('antigravity'); orch.emit('agents', orch.agents());
+      await until(() => ui(`document.querySelector('#targets [aria-label="Antigravity: remaining quota unavailable"]')?.textContent === '—'`), 2000, 'unknown quota');
+      orch.recordUsage('antigravity', savedQuota); orch.emit('agents', orch.agents());
       // Settings: every section draws, changes are saved, Escape closes it.
       c.sites.push('example.com');
       await ui(`document.getElementById('settings-btn').click()`);
@@ -123,6 +167,7 @@ export async function smoke({ win, orch, browser, mcp, store }) {
       for (const n of await ui(`[...document.querySelectorAll('.st-nav')].map((e) => e.dataset.k.slice(4))`)) {
         await nav(n);
         if (n === 'agents') await ui(`document.querySelector('.st-open')?.click()`);
+        if (n === 'usage') { assert.match(await ui(`document.querySelector('.st-main').innerText`), /73% left/); assert.equal(await ui(`document.querySelector('[aria-label="Claude 5 h remaining"]').getAttribute('aria-valuenow')`), '73'); }
         await sleep(300);
         await shot(`settings-${n}`);
         assert.ok(!/\b(null|undefined|NaN)\b|\[object/.test(await ui(`document.getElementById('settings').innerText`)), n);

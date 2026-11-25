@@ -7,11 +7,11 @@ One chat for all your coding agents. Claude Code, Codex, Antigravity and other a
 ## What it does
 
 - **Continue when one runs out.** If an agent hits its usage limit mid-task, the next one gets the conversation, the unfinished work and the task, and carries on. Automatic, or by hand with "Continue with…".
-- **Work together.** `@claude write the HTML @codex write the CSS @antigravity test it` gives each its own task, at the same time, in one chat. `@all` asks everyone.
+- **Work together.** `@claude write the HTML @codex write the CSS @gemini test it` gives each its own task, at the same time, in one chat. `@all` asks everyone.
 - **Know about each other.** Each agent is told what the others said and did since it last spoke. While working they can check on teammates, leave notes and claim files. CopyCLI warns when two edit the same file.
 - **Share a browser.** A built-in browser that you see and every connected agent can drive: open, read, click, type, scroll, screenshot, console. It asks you per site, and refuses to type into password, code and card fields.
 - **Choose models.** Pick each agent's model and effort under the message box or in Settings.
-- **Watch usage.** See how much of your limit is used and what each task cost. You are told when a task uses a lot; agents keep working. Pausing them instead is an option in Settings.
+- **Watch usage.** See the remaining plan percentage for Claude, Codex and Gemini beside each agent, with reset times and all quota groups in Settings → Usage. Quotas refresh at startup, every two minutes and after tasks, using each CLI’s own quota command without a model call. Gemini’s summary follows the selected model group; missing percentages show “—”, never an estimate. You are told when a task uses a lot; agents keep working. Pausing them instead is an option in Settings.
 - **Keep your approvals.** Plan only, Ask first, Edit files freely, or Full access, per chat.
 
 ## Agents

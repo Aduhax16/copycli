@@ -6,7 +6,7 @@ import { ClaudeDriver } from './claude.js';
 import { CodexDriver } from './codex.js';
 import { AcpDriver } from './acp.js';
 import { agentEnv, which } from '../env.js';
-import { probe } from './probe.js';
+import { probe, probeUsage } from './probe.js';
 
 // Newest file matching a path with one or more "*" directory segments.
 function newest(pattern) {
@@ -26,7 +26,7 @@ export const AGENTS = [
     fallback: () => newest(path.join(homedir(), 'Library/Application Support/Claude/claude-code/*/*/claude.app/Contents/MacOS/claude')) },
   { id: 'codex', name: 'Codex', color: '#3f8f78', kind: 'codex', bins: ['codex'], install: 'npm install -g @openai/codex', login: ['login'], statusArgs: ['login', 'status'],
     fallback: () => ['/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex', '/Applications/Codex.app/Contents/Resources/codex'].find((f) => fs.existsSync(f)) },
-  { id: 'antigravity', name: 'Antigravity', about: 'Gemini models, with your Google account', bin: '.local/bin/agy', color: '#4a7fd6', aliases: ['agy', 'gemini'], kind: 'acp', probe: 'agy', args: ['acp'], bins: ['agy'], install: 'curl -fsSL https://antigravity.google/cli/install.sh | bash', login: [] },
+  { id: 'antigravity', name: 'Antigravity', about: 'Gemini models, with your Google account', bin: '.local/bin/agy', color: '#4a7fd6', handle: 'gemini', aliases: ['agy'], kind: 'acp', probe: 'agy', args: ['acp'], bins: ['agy'], install: 'curl -fsSL https://antigravity.google/cli/install.sh | bash', login: [] },
   acp('copilot', 'GitHub Copilot', '#8a6fb0', ['copilot'], ['--acp'], { install: 'npm install -g @github/copilot', login: ['login'] }),
   acp('cursor', 'Cursor', '#7d8590', ['cursor-agent'], ['acp'], { login: ['login'], site: 'https://cursor.com/cli' }),
   acp('opencode', 'OpenCode', '#b0894f', ['opencode'], ['acp'], { install: 'npm install -g opencode-ai', login: ['auth', 'login'] }),
@@ -66,6 +66,8 @@ export async function detect(def) {
 }
 
 export async function probeAgent(def, info, version) { return probe(def, info.path, await agentEnv(), version); }
+
+export async function probeAgentUsage(def, info, version) { return probeUsage(def, info.path, await agentEnv(), version); }
 
 export async function makeDriver(def, info, version) {
   const o = { path: info.path, args: def.args, env: await agentEnv(), version };

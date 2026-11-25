@@ -2,6 +2,7 @@
 import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { spawnJsonl, spawnRpc } from './proc.js';
+import { claudeUsage, agyUsage } from './quotas.js';
 
 const limit = (p, ms) => { let t; return Promise.race([p, new Promise((_r, no) => { t = setTimeout(() => no(new Error('timeout')), ms); })]).finally(() => clearTimeout(t)); };
 
@@ -39,20 +40,50 @@ async function codex(path, env, version) {
     })(), 15000);
   } finally { rpc.kill(); }
 }
-async function claude(path, env) {
-  let done;
+async function claude(path, env, models = true) {
+  let done, info = {};
   const got = new Promise((r) => { done = r; });
   const p = spawnJsonl(path, ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--no-session-persistence'], {
-    cwd: tmpdir(), env, onJson: (m) => { if (m.type === 'control_response') done(m.response?.response?.models || []); }, onExit: () => done([]),
+    cwd: tmpdir(), env, onJson: (m) => {
+      if (m.type !== 'control_response') return;
+      const reply = m.response, data = reply?.response || {};
+      if (reply?.request_id === 'models') {
+        if (models) {
+          const ms = data.models || [], def = ms.find((m) => m.value === 'default')?.resolvedModel;
+          info = { models: ms.filter((m) => m.value !== 'default').map((m) => ({ id: m.value, name: m.displayName, desc: m.description, efforts: m.supportedEffortLevels || [] })), defaultModel: ms.find((m) => m.value !== 'default' && m.resolvedModel === def)?.value || def || null };
+        }
+        // This control request reads /usage; it does not run a model or read credentials.
+        p.send({ type: 'control_request', request_id: 'usage', request: { subtype: 'get_usage', skip_behaviors: true } });
+      } else if (reply?.request_id === 'usage') {
+        done({ ...info, ...(reply.subtype === 'success' ? { usage: claudeUsage(data) } : {}) });
+      }
+    }, onExit: () => done(info),
   });
   p.send({ type: 'control_request', request_id: 'models', request: { subtype: 'initialize' } });
-  try {
-    const ms = await limit(got, 15000);
-    const def = ms.find((m) => m.value === 'default')?.resolvedModel;
-    return { models: ms.filter((m) => m.value !== 'default').map((m) => ({ id: m.value, name: m.displayName, desc: m.description, efforts: m.supportedEffortLevels || [] })), defaultModel: ms.find((m) => m.value !== 'default' && m.resolvedModel === def)?.value || def || null };
-  } finally { p.kill(); }
+  try { return await limit(got, 20000).catch(() => info); } finally { p.kill(); }
 }
-const agy = (path, env) => new Promise((r) => execFile(path, ['models'], { env, timeout: 15000 }, (_e, out) => r({ models: parseAgyModels(out || '') })));
+export const agyQuota = (path, env) => new Promise((resolve, reject) => execFile(path, ['-p', '/usage', '--output-format', 'stream-json', '--print-timeout', '15s'], { cwd: tmpdir(), env, timeout: 20000, maxBuffer: 1024 * 1024 }, (err, out) => {
+  if (err) return reject(err);
+  for (const line of (out || '').split('\n')) {
+    let m; try { m = JSON.parse(line); } catch { continue; }
+    const command = m.command || m.result?.command;
+    if (command?.name === 'usage' && Array.isArray(command.data?.groups)) return resolve({ usage: agyUsage(command.data) });
+  }
+  reject(new Error('Antigravity did not report plan quota'));
+}));
+const agy = async (path, env) => {
+  const [models, quota] = await Promise.all([
+    new Promise((r) => execFile(path, ['models'], { env, timeout: 15000 }, (_e, out) => r(parseAgyModels(out || '')))),
+    agyQuota(path, env).catch(() => ({})),
+  ]);
+  return { models, ...quota };
+};
+export async function probeUsage(def, path, env, version) {
+  if (def.kind === 'claude') return claude(path, env, false);
+  if (def.probe === 'agy') return agyQuota(path, env);
+  if (def.kind === 'codex') return codex(path, env, version);
+  return {};
+}
 
 export async function probe(def, path, env, version) {
   const f = { codex, claude, agy }[def.probe || def.kind];

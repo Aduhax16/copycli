@@ -1,3 +1,4 @@
+import { remainingPercent, quotaName } from '../shared/usage.js';
 // The Settings view. It fills the window over the chat; every change is saved as it is made.
 const MODES = [
   ['plan', 'Plan only', 'Agents look around and propose. They change nothing.'],
@@ -29,7 +30,6 @@ export function createSettings({ root, h, call, go, state, save, pickers, onTogg
   const expanded = new Set();
   let draft = { name: '', command: '' };
   const S = () => state().settings;
-  const limitName = (min) => (min >= 10080 ? 'Weekly' : min >= 60 ? `${Math.round(min / 60)}-hour` : `${min}-minute`);
 
   // ---- pieces ----
   const row = (title, desc, ...control) => h('div', { class: 'st-row' }, h('div', { class: 'st-label' }, h('div', { class: 'st-name' }, title), desc ? h('div', { class: 'st-desc' }, desc) : null), control.length ? h('div', { class: 'st-control' }, control) : null);
@@ -42,9 +42,9 @@ export function createSettings({ root, h, call, go, state, save, pickers, onTogg
   const flip = (k) => (v) => put({ [k]: v }).catch(() => draw());
   const number = (k, min, max, unit, label) => h('label', { class: 'st-num' }, h('input', { type: 'number', min, max, 'data-k': `guard-${k}`, 'aria-label': label, value: S().guard[k], disabled: !S().guard.on, onchange: async (e) => { const i = e.target; if (i.value !== '') await save({ guard: { [k]: Number(i.value) } }).catch(() => {}); i.value = S().guard[k]; } }), unit);
   const status = (a) => (!a.installed ? ['Not installed', ''] : !a.enabled ? ['Off', ''] : a.signedIn === false ? ['Not signed in', 'warn'] : a.limitedUntil ? [`Out of usage until ${new Date(a.limitedUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`, 'warn'] : a.signedIn ? ['Ready', 'good'] : ['Installed', '']);
-  const meters = (a) => a.usage.map((u) => h('div', { class: 'st-meter' },
-    h('div', { class: 'st-meter-top' }, h('span', {}, `${limitName(u.minutes)} limit`), h('span', {}, `${u.usedPercent}% used${u.resetsAt ? ` · resets ${new Date(u.resetsAt * 1000).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}`)),
-    h('div', { class: `st-bar${u.usedPercent >= 95 ? ' bad' : u.usedPercent >= 80 ? ' warn' : ''}`, role: 'meter', 'aria-label': `${a.name} ${limitName(u.minutes)} limit`, 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(u.usedPercent) }, h('i', { style: `width:${Math.min(100, u.usedPercent)}%` }))));
+  const meters = (a) => (a.usageDetails || a.usage).map((u) => h('div', { class: 'st-meter' },
+    h('div', { class: 'st-meter-top' }, h('span', {}, quotaName(u)), h('span', {}, `${remainingPercent([u])}% left${u.resetsAt ? ` · resets ${new Date(u.resetsAt * 1000).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}`)),
+    h('div', { class: `st-bar${u.usedPercent >= 95 ? ' bad' : u.usedPercent >= 80 ? ' warn' : ''}`, role: 'meter', 'aria-label': `${a.name} ${quotaName(u)} remaining`, 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(remainingPercent([u])) }, h('i', { style: `width:${remainingPercent([u])}%` }))));
 
   // ---- sections ----
   const SECTIONS = {
@@ -68,9 +68,13 @@ export function createSettings({ root, h, call, go, state, save, pickers, onTogg
       ];
     }],
     usage: ['Usage', 'What is left of your plans, and when to stop spending it.', () => {
-      const { agents } = state(), on = agents.filter((a) => a.installed && a.enabled), known = on.filter((a) => a.usage.length), other = on.filter((a) => !a.usage.length);
+      const { agents } = state(), on = agents.filter((a) => a.installed && a.enabled), known = on.filter((a) => (a.usageDetails || a.usage).length), other = on.filter((a) => !(a.usageDetails || a.usage).length);
       return [
-        group('Your plans', known.length ? card(known.map((a) => h('div', { class: 'st-row st-stack' }, h('div', { class: 'st-agent st-name' }, h('span', { class: 'dot', c: a.color }), a.name), meters(a)))) : null, other.length ? h('p', { class: 'st-hint' }, `${other.map((a) => a.name).join(', ')}: usage shows up once the agent reports it.`) : null),
+        group('Your plans', card(
+          known.map((a) => h('div', { class: 'st-row st-stack' }, h('div', { class: 'st-agent st-name' }, h('span', { class: 'dot', c: a.color }), a.name), meters(a), a.usageUpdatedAt ? h('div', { class: 'st-hint' }, `Checked ${new Date(a.usageUpdatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`) : null)),
+          other.map((a) => row(a.name, 'The provider has not returned a plan percentage yet.', h('span', { class: 'dim' }, '—')))),
+          h('p', { class: 'st-hint' }, 'Percentages show remaining plan quota. The chat shows the tightest limit for the selected model. Refreshed every two minutes and after tasks.')),
+        h('div', { class: 'st-actions' }, button('Refresh quotas', () => go('agents:refresh'))),
         group('When an agent runs out', card(row('Hand over automatically', 'The next agent in your order continues the task.', toggle('autoHandoff', 'Hand over automatically', S().autoHandoff, flip('autoHandoff'))))),
         group('Saving usage', card(
           row('Pause agents that use too much', 'Off: you are told, and the agent keeps working.', toggle('guard-on', 'Pause agents that use too much', S().guard.on, (v) => put({ guard: { on: v } }).catch(() => draw()))),

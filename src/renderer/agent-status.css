@@ -1,0 +1,98 @@
+/* Compact live agent status indicator in the header (#top) */
+.agent-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 420px;
+  overflow: hidden;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--subtle);
+}
+
+.as-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: none;
+  min-height: 24px;
+  padding: 2px 8px 2px 7px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dim);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.as-pill:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.as-pill[data-status="running"] {
+  background: var(--card);
+  color: var(--text);
+  box-shadow: 0 1px 2px light-dark(#0000000a, #00000030);
+}
+
+.as-pill .dot {
+  width: 6px;
+  height: 6px;
+}
+
+.as-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 84px;
+}
+
+.as-sym {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.as-icon {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  stroke-width: 2.1;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.as-pill[data-status="running"] .as-sym { color: var(--text); }
+.as-pill[data-status="done"] .as-sym { color: var(--good); }
+.as-pill[data-status="paused"] .as-sym,
+.as-pill[data-status="limit"] .as-sym { color: var(--warn); }
+.as-pill[data-status="error"] .as-sym { color: var(--bad); }
+.as-pill[data-status="cancelled"] .as-sym { color: var(--dim); }
+
+.as-icon-spinner {
+  animation: as-spin .85s linear infinite;
+}
+
+@keyframes as-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 1100px) {
+  .as-name { display: none; }
+  .as-pill { padding: 2px 6px; gap: 4px; }
+}
+
+body:has(#web:not([hidden])) .as-name { display: none; }
+body:has(#web:not([hidden])) .as-pill { padding: 2px 6px; gap: 4px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .as-icon-spinner { animation: none; }
+}
