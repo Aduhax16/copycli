@@ -1,5 +1,5 @@
 // The built-in browser: tabs the user sees, which agents can also drive.
-import { WebContentsView, session, shell } from 'electron';
+import { WebContentsView, nativeImage, session, shell } from 'electron';
 import { KEYS, normalizeUrl } from './browser-tools.js';
 
 // Injected once per page. Refs stay the same for as long as an element is on the page.
@@ -26,6 +26,9 @@ const STALL = 5000;
 const hostOf = (u) => { try { return new URL(u).hostname; } catch { return ''; } };
 const site = (h) => String(h || '').split('.').slice(-2).join('.');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Views are always drawn above the app's own page, so a tab that is not showing waits outside the window.
+// One pixel stays inside, in the rounded corner: fully outside, it would stop rendering and agents could not use it.
+export const PARKED = { x: -1199, y: -799, width: 1200, height: 800 };
 const secretField = (f) => f.password || /^cc-|one-time-code|-password$/.test(f.autocomplete || '');
 
 export class Browser {
@@ -87,8 +90,7 @@ export class Browser {
     wc.on('did-fail-load', (_e, code, desc, url, main) => { if (main && code !== -3) t.logs.push(`error: could not load ${url}: ${desc}`); });
     wc.debugger.attach('1.3');
     wc.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
-    // Background tabs sit underneath the app so they keep rendering.
-    view.setBounds({ x: 0, y: 0, width: 1200, height: 800 });
+    view.setBounds(PARKED);
     this.win.contentView.addChildView(view, 0);
     if (front || !this.active) this.select(id); else this.changed();
     return t;
@@ -97,7 +99,7 @@ export class Browser {
     for (const t of this.tabs.values()) {
       const up = t.id === this.active && this.bounds;
       if (up) { this.win.contentView.addChildView(t.view); t.view.setBounds(this.bounds); t.view.setBorderRadius(8); }
-      else { this.win.contentView.addChildView(t.view, 0); t.view.setBounds({ x: 0, y: 0, width: 1200, height: 800 }); }
+      else t.view.setBounds(PARKED);
     }
   }
   setBounds(b) { this.bounds = b && b.width > 20 && b.height > 20 ? Object.fromEntries(['x', 'y', 'width', 'height'].map((k) => [k, Math.round(b[k])])) : null; this.layout(); }
@@ -209,9 +211,11 @@ export class Browser {
   async screenshot(t) {
     await this.settle(t, 5000);
     // One image pixel per page pixel, so x and y read off it can be clicked; also much smaller.
-    const v = await this.js(t, '({ width: innerWidth, height: innerHeight, dpr: devicePixelRatio })');
-    const r = await this.cdp(t, 'Page.captureScreenshot', { format: 'jpeg', quality: 60, clip: { x: 0, y: 0, width: v.width, height: v.height, scale: 1 / v.dpr } });
-    return [{ type: 'image', data: r.data, mimeType: 'image/jpeg' }];
+    // Shrunk here: asking for a scaled clip resizes the page, which hangs while the tab is outside the window.
+    const width = await this.js(t, 'innerWidth');
+    const r = await this.cdp(t, 'Page.captureScreenshot', { format: 'jpeg', quality: 90 });
+    const img = nativeImage.createFromBuffer(Buffer.from(r.data, 'base64'));
+    return [{ type: 'image', data: img.resize({ width }).toJPEG(60).toString('base64'), mimeType: 'image/jpeg' }];
   }
   async point(t, { ref, text, x, y }) {
     if (!ref && text !== undefined) { ref = await this.js(t, `__c.byText(${JSON.stringify(String(text))})`); if (!ref) throw new Error(`Nothing to click named "${text}". Use browser_find.`); }
