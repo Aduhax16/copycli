@@ -2,6 +2,8 @@ import { remainingPercent, quotaTooltip } from '../shared/usage.js';
 import { markdown } from './markdown.js';
 import { createSettings } from './settings.js';
 import { createAgentStatus } from './agent-status.js';
+import { createLanes } from './lanes.js';
+import { createChatSidebar } from './chat-sidebar.js';
 const $ = (id) => document.getElementById(id);
 const h = (tag, props = {}, ...kids) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(props)) { if (v === undefined || v === null || v === false) continue; if (k.startsWith('on')) e[k] = v; else if (k === 'class') e.className = v; else if (k === 'c') e.style.setProperty('--c', v); else if (k in e && k !== 'list') e[k] = v; else e.setAttribute(k, v); } e.append(...kids.flat().filter((x) => x !== null && x !== undefined && x !== false)); return e; };
 let agents = [], chats = [], chat = null, approvals = [], tabs = { tabs: [], active: null }, settings = {}, home = '', version = '';
@@ -42,35 +44,49 @@ function composerHint() { $('send-hint').textContent = settings.sendKey === 'mod
 
 
 // ---- sidebar ----
+let sidebarModal = false;
+const sidebar = createChatSidebar({
+  root: $('chats'), h, nice,
+  onOpen: (id) => open(id).catch(() => {}),
+  onUpdate: async (id, patch) => {
+    const c = await call('chat:update', id, patch);
+    const meta = { title: c.title, pinned: !!c.pinned, archived: !!c.archived, group: c.group || '' };
+    if (chat?.id === id) { Object.assign(chat, meta); $('title').value = c.title; }
+    return meta;
+  },
+  onDelete: async (id) => {
+    const deleted = await call('chat:delete', id);
+    if (deleted && chat?.id === id) { chat = null; drawChat(); drawChats(); }
+    return deleted;
+  },
+  onModal: (on) => { sidebarModal = on; layout(); },
+});
 function drawChats() {
-  $('chat-count').textContent = chats.length || '';
-  $('chats').replaceChildren(...chats.map((c) => h('div', { class: `chat${chat?.id === c.id ? ' on' : ''}` },
-    h('button', { class: 'open', 'aria-current': chat?.id === c.id ? 'page' : undefined, onclick: () => open(c.id) }, h('div', { class: 't' }, c.title), h('div', { class: 'f' }, nice(c.cwd))),
-    c.running ? h('span', { class: 'dot live' }) : null,
-    h('button', { class: 'x', title: 'Delete chat', 'aria-label': `Delete ${c.title}`, onclick: async () => { if (await call('chat:delete', c.id) && chat?.id === c.id) { chat = null; drawChat(); } } }, '✕'))));
+  sidebar.render(chats, chat?.id);
   $('stop').hidden = !chats.find((c) => c.id === chat?.id)?.running;
 }
+
 async function open(id) {
   const r = await call('chat:open', id);
   chat = r.chat; approvals = r.approvals;
   localStorage.last = id;
   drawChat(); drawChats();
-  $('log').scrollTop = 1e9;
+  $('log').scrollTop = 0;
   $('input').focus();
 }
 async function newChat() { const c = await call('chat:new'); if (c) open(c.id); }
 
 // ---- chat ----
-const cards = new Map();
+const lanesRoot = h('div', { class: 'lanes-wrap' });
+const lanes = createLanes({ root: lanesRoot, h, agent, ready: () => ready(), dot, markdown, go, call, sendKey: () => settings.sendKey });
 const agentStatus = createAgentStatus({
   root: $('agent-status'),
   h,
   agent,
   dot,
-  onSelect: (id) => cards.get(id)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }),
+  onSelect: (id) => lanes.reveal(id),
 });
 function drawChat() {
-  cards.clear();
   for (const x of ['title', 'folder', 'composer', 'composer-hint']) $(x).hidden = !chat;
   composerHint();
   if (!chat) {
@@ -86,9 +102,9 @@ function drawChat() {
     return;
   }
   $('title').value = chat.title; $('folder').replaceChildren(icon('folder'), h('span', { class: 'folder-name' }, nice(chat.cwd))); $('folder').title = `Change folder · ${chat.cwd}`; $('mode').value = chat.mode;
-  $('log').replaceChildren();
-  chat.messages.forEach(place);
-  if (!chat.messages.length) $('log').append(h('div', { class: 'empty' },
+  lanes.render(chat);
+  $('log').replaceChildren(lanesRoot);
+  if (!chat.messages.length) $('log').replaceChildren(h('div', { class: 'empty' },
     h('div', { class: 'welcome-mark' }, brandLogo()), h('div', { class: 'eyebrow' }, 'Your next idea starts here'),
     h('h1', {}, 'What are we building?'), h('p', {}, 'Pick your agents below. Give them one goal or a task each — they’ll work together in this folder.'),
     h('div', { class: 'starter-grid' },
@@ -96,48 +112,7 @@ function drawChat() {
       starter('Explore this project', 'Understand the code and structure', 'search', 'Explore this project and explain its structure and how to run it.'))));
   drawTargets(); drawApprovals(); agentStatus.render(chat);
 }
-function place(m) {
-  $('log').querySelector('.empty')?.remove();
-  const old = cards.get(m.id);
-  const keep = old && new Set([...old.querySelectorAll('details[open]')].map((d) => d.dataset.id));
-  const n = m.role === 'user' ? userCard(m) : m.role === 'system' ? sysCard(m) : agentCard(m, keep);
-  cards.set(m.id, n);
-  if (old) return old.replaceWith(n);
-  if (m.role === 'agent' && !m.note && m.round) {
-    const last = $('log').lastElementChild;
-    let r = [...$('log').querySelectorAll('.round')].find((x) => x.dataset.round === m.round);
-    // Later work in the same round (a handoff) starts a new row.
-    if (!r || (r !== last && last?.classList.contains('limit'))) { r = h('div', { class: 'round' }); r.dataset.round = m.round; $('log').querySelectorAll('.round').forEach((x) => { if (x.dataset.round === m.round) x.dataset.round += '-done'; }); $('log').append(r); }
-    r.append(n);
-  } else $('log').append(n);
-}
-const userCard = (m) => h('div', { class: 'user' }, h('div', { class: 'to' }, `To ${m.targets.map((t) => agent(t).name).join(', ')}`), h('div', { class: 'bubble' }, m.text));
-const sysCard = (m) => h('div', { class: `sys ${m.level || ''}` }, m.text);
-const tok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n || 0));
-const spend = (m) => { const u = m.usage; const bits = []; if (u) bits.push(`${tok(u.fresh)} new`, u.cached ? `${tok(u.cached)} reused` : '', `${tok(u.output)} written`, u.calls ? `${u.calls} calls` : ''); if (m.spent) bits.push(`${m.spent}% of limit`); return bits.filter(Boolean).join(' · '); };
 const span = (min) => (min >= 10080 ? 'week' : min >= 60 ? `${Math.round(min / 60)} h` : `${min} min`);
-const STATE = { running: 'Working', paused: 'Paused', limit: 'Out of usage', error: 'Stopped', cancelled: 'Stopped by you' };
-function agentCard(m, keep = new Set()) {
-  const a = agent(m.agentId), live = m.status === 'running';
-  const others = ready().filter((x) => x.id !== m.agentId);
-  const body = h('div', { class: 'body' });
-  for (const p of m.parts) {
-    if (p.type === 'text') body.append(markdown(p.text));
-    else {
-      const d = h('details', { class: 'tool', open: keep.has(p.id) }, h('summary', {}, h('span', { class: `mark ${p.status}` }, p.status === 'done' ? '✓' : p.status === 'error' ? '✕' : '…'), h('b', {}, p.name.replace(/^mcp__copycli__/, '')), p.detail ? h('code', {}, p.detail.split('\n')[0]) : null));
-      d.dataset.id = p.id;
-      const full = [p.detail?.includes('\n') || p.detail?.length > 80 ? p.detail : '', p.output].filter(Boolean).join('\n\n');
-      if (full) d.append(h('pre', {}, full));
-      body.append(d);
-    }
-  }
-  if (live && !m.parts.length) body.append(h('span', { class: 'dim' }, 'Starting…'));
-  if (m.error) body.append(h('p', { class: `err ${m.status}` }, m.error));
-  const more = h('select', { 'aria-label': 'Continue with another agent', onchange: (e) => { if (e.target.value) go('continue', chat.id, m.id, e.target.value); e.target.value = ''; } }, h('option', { value: '' }, 'Continue with…'), others.map((o) => h('option', { value: o.id }, o.name)));
-  return h('article', { class: `agent${m.note ? ' note' : ''}` },
-    h('header', {}, dot(m.agentId, live), a.name, h('span', { class: `state ${m.status}` }, m.note ? 'Note to the team' : STATE[m.status] || ''), h('span', { class: 'grow' }), live ? h('button', { class: 'quiet', onclick: () => go('stop', chat.id, m.agentId) }, 'Stop') : null, m.status === 'paused' ? h('button', { onclick: () => go('continue', chat.id, m.id, m.agentId) }, 'Continue') : null, live ? null : !m.note && others.length && m.status !== 'done' ? more : null),
-    body, m.files?.length ? h('div', { class: 'files' }, `Changed ${m.files.join(', ')}`) : null, spend(m) ? h('div', { class: 'files spend', title: 'Tokens. New: read for the first time. Reused: read again from cache, at a lower cost. Written: the answer, including thinking. Each company counts tokens its own way.' }, spend(m)) : null);
-}
 
 // ---- composer ----
 function drawTargets() {
@@ -188,7 +163,7 @@ $('input').addEventListener('keydown', (e) => {
 $('composer').onsubmit = (e) => { e.preventDefault(); send().catch(() => {}); };
 $('stop').onclick = () => go('stop', chat.id);
 $('mode').onchange = async (e) => { try { const c = await call('chat:update', chat.id, { mode: e.target.value }); chat.mode = c.mode; if (c.mode === 'full') toast('Full access: agents can run any command and use any site without asking.'); } catch {} };
-$('title').onchange = (e) => go('chat:update', chat.id, { title: e.target.value });
+$('title').onchange = async (e) => { const id = chat.id, before = chat.title; try { const c = await call('chat:update', id, { title: e.target.value }); if (chat?.id === id) { chat.title = c.title; e.target.value = c.title; } } catch { if (chat?.id === id) e.target.value = before; } };
 $('folder').onclick = async () => { const c = await call('chat:folder', chat.id).catch(() => null); if (c) { chat = c; drawChat(); } };
 
 // ---- approvals ----
@@ -204,7 +179,7 @@ $('new').onclick = () => newChat().catch(() => {});
 
 // ---- browser ----
 function layout() {
-  const on = !$('web').hidden && !prefs.isOpen && tabs.active;
+  const on = !$('web').hidden && !prefs.isOpen && !sidebarModal && tabs.active;
   const r = $('view').getBoundingClientRect();
   window.deck.call('browser:bounds', on ? { x: r.x, y: r.y, width: r.width, height: r.height } : null);
 }
@@ -236,14 +211,13 @@ document.addEventListener('click', (e) => { const a = e.target.closest('a[href]'
 // ---- events ----
 window.deck.on((ch, d) => {
   if (ch === 'agents') { agents = d; if (chat) { drawTargets(); agentStatus.render(chat); } else drawChat(); prefs.refresh(); drawWeb(); }
-  if (ch === 'chats') { chats = d; const c = chats.find((x) => x.id === chat?.id); if (c && document.activeElement !== $('title')) $('title').value = c.title; drawChats(); }
+  if (ch === 'chats') { chats = d; const c = chats.find((x) => x.id === chat?.id); if (c) { Object.assign(chat, { title: c.title, pinned: c.pinned, archived: c.archived, group: c.group }); if (document.activeElement !== $('title')) $('title').value = c.title; } drawChats(); }
   if (ch === 'message' && d.chatId === chat?.id) {
-    const log = $('log'), atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 90;
     const i = chat.messages.findIndex((m) => m.id === d.message.id);
     if (i < 0) chat.messages.push(d.message); else chat.messages[i] = d.message;
-    place(d.message);
+    // Each agent keeps its own box; nothing scrolls under the user.
+    if (!$('log').contains(lanesRoot)) { lanes.render(chat); $('log').replaceChildren(lanesRoot); } else lanes.update(d.message);
     agentStatus.render(chat);
-    if (atEnd || d.message.role === 'user') log.scrollTop = 1e9;
   }
   if (ch === 'usage') { const a = agents.find((x) => x.id === d.agentId); if (a) { a.usage = d.usage; a.usageDetails = d.usageDetails || d.usage; a.usageUpdatedAt = d.usageUpdatedAt; if (chat) drawTargets(); prefs.refresh(); } }
   if (ch === 'approval') { approvals.push(d); drawApprovals(); if (d.chatId !== chat?.id) toast(`${agent(d.agentId).name} needs your approval in another chat`); }

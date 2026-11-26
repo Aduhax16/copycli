@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { allAgents } from '../src/main/agents/registry.js';
-import { parseMentions, catchUp, buildPrompt, instructionsFor } from '../src/main/context.js';
+import { parseMentions, addressed, renderMessage, catchUp, buildPrompt, instructionsFor } from '../src/main/context.js';
 import { isLimitError } from '../src/main/limits.js';
 import { normalizeUrl } from '../src/main/browser-tools.js';
 import { cleanEnv } from '../src/main/env.js';
@@ -41,6 +41,56 @@ test('Antigravity answers to @gemini, and to its old names', () => {
   assert.deepEqual([handle('antigravity'), handle('claude')], ['gemini', 'claude']);
   o.store.settings.custom.push({ id: 'gemini', name: 'Gemini', command: 'x' });
   assert.deepEqual([handle('antigravity'), handle('gemini')], ['antigravity', 'gemini']);
+});
+test('mentioned agents get the whole message unless the mentions only address it', () => {
+  const agents = allAgents(), name = (id) => agents.find((a) => a.id === id).name;
+  const go = (t) => Object.fromEntries(addressed(t, parseMentions(t, agents), name).map((j) => [j.id, j]));
+  // Nothing to lose: the mentions only say who it is for.
+  assert.equal(go('@claude fix it').claude.task, 'fix it');
+  assert.equal(go('@claude and @gemini: review it').antigravity.task, 'review it');
+  assert.equal(go('hola @claude').claude.task, 'hola @claude');
+  // A mention inside a sentence keeps the sentence.
+  const one = 'quiero llamarlo @gemini, si se puede';
+  assert.equal(go(one).antigravity.task, one);
+  const t = 'Cambia los @, ya que @antigravity quiero llamarlo @gemini. Reparte @codex las tareas con @claude . Ponlos a trabajar';
+  const r = go(t);
+  assert.deepEqual(Object.keys(r).sort(), ['antigravity', 'claude', 'codex']);
+  for (const id of Object.keys(r)) { assert.ok(r[id].task.startsWith(`${t}\n`)); assert.match(r[id].task, new RegExp(`This copy is for ${name(id)} \\(@`)); }
+});
+test('an agent asks in its box; others pause only when it says so, and continue after the answer', async () => {
+  const prompts = { claude: [], codex: [] };
+  let c, o;
+  const ask = (pause) => async ({ prompt }) => { prompts.claude.push(prompt); if (prompts.claude.length === 1) { await until(() => prompts.codex.length); assert.match(await o.callTool({ chatId: c.id, agentId: 'claude' }, 'ask_user', { question: 'Blue or red?', pause_others: pause }), pause ? /Paused until the user answers: Codex/ : /End your turn/); } return { status: 'done' }; };
+  const work = async ({ prompt, signal }) => { prompts.codex.push(prompt); if (prompts.codex.length > 1) return { status: 'done' }; await new Promise((r) => { if (signal.aborted) r(); signal.addEventListener('abort', r); setTimeout(r, 400); }); return { status: signal.aborted ? 'cancelled' : 'done' }; };
+  ({ o } = setup({ claude: ask(true), codex: work }));
+  await o.refreshAgents();
+  c = o.createChat({ cwd: tmp() });
+  o.send(c.id, '@claude pick a colour @codex build the page');
+  await done(o);
+  const q = c.messages.find((m) => m.agentId === 'claude' && m.question), held = c.messages.find((m) => m.agentId === 'codex');
+  assert.equal(q.question.text, 'Blue or red?');
+  assert.equal(held.status, 'paused');
+  assert.equal(held.pausedFor, q.question.id);
+  assert.match(held.error, /answer Claude's question/);
+  assert.throws(() => o.answer(c.id, q.id, '  '), /Write an answer/);
+  o.answer(c.id, q.id, 'Blue');
+  await done(o);
+  assert.throws(() => o.answer(c.id, q.id, 'Red'), /already answered/);
+  assert.match(prompts.claude[1], /You asked: Blue or red\?\n\nThey answered: Blue/);
+  assert.match(prompts.codex[1], /Continue this task from where you stopped/);
+  const reply = c.messages.find((m) => m.role === 'user' && m.answers === q.id);
+  assert.deepEqual([reply.text, reply.targets], ['Blue', ['claude']]);
+  // The question and its answer reach the others' context.
+  assert.match(renderMessage(q, (x) => x), /Asked the user: Blue or red\?\nThe user answered: Blue/);
+  // Without pause_others, the others keep working.
+  prompts.claude.length = prompts.codex.length = 0;
+  ({ o } = setup({ claude: ask(false), codex: work }));
+  await o.refreshAgents();
+  c = o.createChat({ cwd: tmp() });
+  o.send(c.id, '@claude pick a colour @codex build the page');
+  await done(o);
+  assert.equal(c.messages.find((m) => m.agentId === 'codex').status, 'done');
+  assert.ok(!c.messages.find((m) => m.agentId === 'claude').question.pauseOthers);
 });
 test('mentions split work', () => {
   assert.deepEqual(parseMentions('Build a site. @claude do the html and @codex do the css', A), [{ id: 'claude', task: 'Build a site.\n\ndo the html' }, { id: 'codex', task: 'Build a site.\n\ndo the css' }]);
@@ -186,6 +236,7 @@ test('agents in one round know about each other, and later agents catch up', asy
   const c = o.createChat({ cwd: tmp() });
   o.send(c.id, '@claude write html @codex write css');
   await done(o);
+  assert.match(prompts.claude[0], /@claude write html @codex write css\n\n\[From CopyCLI.*This copy is for Claude \(@claude\)/);
   assert.match(prompts.claude[0], /Codex: write css/);
   assert.match(prompts.codex[0], /Claude: write html/);
   o.send(c.id, 'review', ['antigravity']);

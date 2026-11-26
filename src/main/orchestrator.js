@@ -1,9 +1,10 @@
+import { chatSummary, applyChatUpdate } from '../shared/chats.js';
 // Runs chats: routes tasks to agents, keeps them aware of each other, hands work over when one runs out.
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { allAgents, detect, makeDriver, probeAgent, probeAgentUsage } from './agents/registry.js';
-import { parseMentions, catchUp, instructionsFor, buildPrompt, renderMessage } from './context.js';
+import { parseMentions, addressed, catchUp, instructionsFor, buildPrompt, renderMessage } from './context.js';
 import { BROWSER_TOOLS, normalizeUrl } from './browser-tools.js';
 import { isContent } from './mcp.js';
 import { TEAM_TOOLS } from './team-tools.js';
@@ -34,6 +35,8 @@ export class Orchestrator {
   get defs() { return allAgents(this.store.settings.custom); }
   def(id) { return this.defs.find((a) => a.id === id); }
   name = (id) => this.def(id)?.name || id;
+  // What to type after @. An agent the user added under that name keeps it.
+  handle(id) { const h = this.def(id)?.handle; return h && !this.def(h) ? h : id; }
   key = (c, a) => `${c}/${a}`;
 
   async refreshAgents() {
@@ -105,13 +108,13 @@ export class Orchestrator {
   agents() {
     const { order, disabled, models } = this.store.settings;
     const rank = (id) => { const i = order.indexOf(id); return i < 0 ? 99 : i; };
-    return this.defs.map((d) => ({ id: d.id, name: d.name, color: d.color, kind: d.kind, custom: !!d.custom, aliases: d.aliases || [], handle: d.handle && !this.def(d.handle) ? d.handle : d.id, install: d.install || null, site: d.site || null, canLogin: !!d.login, about: d.about || '', installed: false, ...this.status.get(d.id), enabled: !disabled.includes(d.id), model: models[d.id] || '', effort: this.store.settings.efforts[d.id] || '', models: this.models(d.id), defaultModel: this.info.get(d.id)?.defaultModel || null, usage: this.windows(d.id), usageDetails: this.allWindows(d.id), usageUpdatedAt: this.usageUpdated.get(d.id) || null, limitedUntil: (this.limited.get(d.id) || 0) > Date.now() ? this.limited.get(d.id) : null }))
+    return this.defs.map((d) => ({ id: d.id, name: d.name, color: d.color, kind: d.kind, custom: !!d.custom, aliases: d.aliases || [], handle: this.handle(d.id), install: d.install || null, site: d.site || null, canLogin: !!d.login, about: d.about || '', installed: false, ...this.status.get(d.id), enabled: !disabled.includes(d.id), model: models[d.id] || '', effort: this.store.settings.efforts[d.id] || '', models: this.models(d.id), defaultModel: this.info.get(d.id)?.defaultModel || null, usage: this.windows(d.id), usageDetails: this.allWindows(d.id), usageUpdatedAt: this.usageUpdated.get(d.id) || null, limitedUntil: (this.limited.get(d.id) || 0) > Date.now() ? this.limited.get(d.id) : null }))
       .sort((a, b) => rank(a.id) - rank(b.id));
   }
   usable() { return this.agents().filter((a) => a.installed && a.enabled && a.signedIn !== false); }
 
   // ---- chats ----
-  listChats() { return [...this.store.chats.values()].map((c) => ({ id: c.id, title: c.title, cwd: c.cwd, updated: c.updated, running: [...this.live.keys()].some((k) => k.startsWith(`${c.id}/`)) })).sort((a, b) => b.updated - a.updated); }
+  listChats() { return [...this.store.chats.values()].map((c) => chatSummary(c, this.busy(c.id))).sort((a, b) => (b.updated || 0) - (a.updated || 0)); }
   chat(id) { const c = this.store.chats.get(id); if (!c) throw new Error('That chat no longer exists'); return c; }
   createChat({ cwd }) {
     const c = { id: randomUUID(), title: 'New chat', cwd: cwd || homedir(), mode: this.store.settings.defaultMode || 'ask', created: Date.now(), updated: Date.now(), messages: [], agents: {}, sites: [] };
@@ -122,7 +125,8 @@ export class Orchestrator {
   }
   updateChat(id, patch) {
     const c = this.chat(id);
-    if (typeof patch.title === 'string' && patch.title.trim()) c.title = patch.title.trim().slice(0, 80);
+    if (patch.cwd && patch.cwd !== c.cwd && this.busy(id)) throw new Error('Stop the agents before changing the folder');
+    applyChatUpdate(c, patch);
     if (['plan', 'ask', 'edit', 'full'].includes(patch.mode)) c.mode = patch.mode;
     // Native sessions belong to a folder, so a new folder starts them over.
     if (patch.cwd && patch.cwd !== c.cwd) { if (this.busy(id)) throw new Error('Stop the agents before changing the folder'); c.cwd = patch.cwd; this.resetSessions(c); }
@@ -149,22 +153,23 @@ export class Orchestrator {
     text = text.trim();
     if (!text) return;
     const usable = this.usable();
-    const jobs = parseMentions(text, this.defs, usable.map((a) => a.id)) || selected.filter((id) => usable.some((a) => a.id === id)).map((id) => ({ id, task: text }));
+    const mentioned = parseMentions(text, this.defs, usable.map((a) => a.id));
+    const jobs = mentioned ? addressed(text, mentioned, this.name, (id) => this.handle(id)) : selected.filter((id) => usable.some((a) => a.id === id)).map((id) => ({ id, task: text }));
     const off = jobs.filter((j) => !usable.some((a) => a.id === j.id)).map((j) => this.name(j.id));
     if (off.length) throw new Error(`${off.join(' and ')} ${off.length > 1 ? 'are' : 'is'} not ready. Open Settings to install, sign in or turn on.`);
     if (!jobs.length) throw new Error(usable.length ? 'Choose at least one agent' : 'No agent is ready. Open Settings to install one or sign in.');
-    if (chat.title === 'New chat') { chat.title = text.replace(/@\w+\s*/g, '').split('\n')[0].slice(0, 60) || 'New chat'; this.emit('chats', this.listChats()); }
+    if (chat.title === 'New chat' && !chat.customTitle) { chat.title = text.replace(/@\w+\s*/g, '').split('\n')[0].slice(0, 60) || 'New chat'; this.emit('chats', this.listChats()); }
     const round = randomUUID();
     this.push(chat, { role: 'user', text, targets: jobs.map((j) => j.id), round });
     for (const j of jobs) this.enqueue(chat, { ...j, round, tried: [] });
   }
   enqueue(chat, job) {
     const k = this.key(chat.id, job.id);
-    if (this.live.has(k)) { this.queue.set(k, [...(this.queue.get(k) || []), job]); this.push(chat, { role: 'system', text: `${this.name(job.id)} is busy and will start this next.` }); return; }
+    if (this.live.has(k)) { this.queue.set(k, [...(this.queue.get(k) || []), job]); this.push(chat, { role: 'system', agentId: job.id, text: `${this.name(job.id)} is busy and will start this next.` }); return; }
     // Reserve the slot now so agents started together all see each other.
-    const turn = { chatId: chat.id, agentId: job.id, task: job.task, claims: new Set(), files: new Set(), abort: new AbortController() };
+    const turn = { chatId: chat.id, agentId: job.id, task: job.part || job.task, claims: new Set(), files: new Set(), abort: new AbortController() };
     this.live.set(k, turn);
-    setImmediate(() => this.runJob(chat, job, turn).catch((e) => { console.error(e); this.live.delete(k); this.push(chat, { role: 'system', level: 'error', text: `${this.name(job.id)}: ${e.message}` }); this.emit('chats', this.listChats()); }));
+    setImmediate(() => this.runJob(chat, job, turn).catch((e) => { console.error(e); this.live.delete(k); this.push(chat, { role: 'system', agentId: job.id, level: 'error', text: `${this.name(job.id)}: ${e.message}` }); this.emit('chats', this.listChats()); }));
   }
   async driver(chat, id) {
     const k = this.key(chat.id, id);
@@ -219,7 +224,7 @@ export class Orchestrator {
     } catch (e) { r = { status: 'error', error: e.message }; }
     clearTimeout(pendingTouch);
     if (turn.abort.signal.aborted) r.status = turn.paused ? 'paused' : 'cancelled';
-    if (turn.paused && r.status === 'paused') r.error = turn.paused;
+    if (turn.paused && r.status === 'paused') { r.error = turn.paused; if (turn.pausedFor) msg.pausedFor = turn.pausedFor; }
     if (r.sessionId) st.session = r.sessionId;
     // A turn that never ran has told the agent nothing.
     if (r.status === 'done' || msg.parts.length) st.seen = [...new Set([...st.seen, ...(st.pending || []), ...chat.messages.filter((m) => m.role === 'user' && m.round === job.round).map((m) => m.id)])];
@@ -236,7 +241,8 @@ export class Orchestrator {
     if (r.status === 'error' && /authentication required|not (logged|signed) in|please (log|sign) in|login required/i.test(r.error || '')) { const s = this.status.get(job.id); if (s) s.signedIn = false; }
     if (r.status === 'limit') this.handOff(chat, job, r);
     else if (r.status === 'done') this.limited.delete(job.id);
-    const next = this.queue.get(k)?.shift();
+    // Work queued behind a turn paused for a question waits for the answer too.
+    const next = msg.pausedFor ? null : this.queue.get(k)?.shift();
     if (next && !this.live.has(k)) this.enqueue(chat, next);
     this.emit('agents', this.agents());
     this.emit('chats', this.listChats());
@@ -257,7 +263,7 @@ export class Orchestrator {
     const n = this.name(turn.agentId), spent = this.spent(turn), used = this.used(turn.agentId);
     if (!g.on || turn.spend) {
       // Never stop work the user did not ask to have stopped; just say so once.
-      if (spent !== null && spent >= g.perTask && !turn.told) { turn.told = true; this.push(this.chat(turn.chatId), { role: 'system', text: `${n} has used ${spent}% of your plan's limit on this task and is still working.` }); }
+      if (spent !== null && spent >= g.perTask && !turn.told) { turn.told = true; this.push(this.chat(turn.chatId), { role: 'system', agentId: turn.agentId, text: `${n} has used ${spent}% of your plan's limit on this task and is still working.` }); }
       return;
     }
     const actions = turn.msg?.parts.filter((p) => p.type === 'tool').length || 0;
@@ -275,9 +281,9 @@ export class Orchestrator {
     this.live.delete(k);
     const next = this.usable().find((a) => ![...job.tried, job.id].includes(a.id) && !a.limitedUntil && !(this.used(a.id) >= 100 - g.reserve));
     if (!turn.abort.signal.aborted && this.store.settings.autoHandoff && next) {
-      this.push(chat, { role: 'system', text: `${next.name} is taking this task to save ${this.name(job.id)}'s usage.` });
+      this.push(chat, { role: 'system', agentId: next.id, text: `${next.name} is taking this task to save ${this.name(job.id)}'s usage.` });
       this.enqueue(chat, { id: next.id, task: job.task, round: job.round, tried: [...job.tried, job.id] });
-    } else this.push(chat, { role: 'system', text: `${this.name(job.id)} did not start.` });
+    } else this.push(chat, { role: 'system', agentId: job.id, text: `${this.name(job.id)} did not start.` });
     this.emit('chats', this.listChats());
     const q = this.queue.get(k)?.shift();
     if (q) this.enqueue(chat, q);
@@ -292,22 +298,38 @@ export class Orchestrator {
     const free = this.usable().filter((a) => !tried.includes(a.id) && !a.limitedUntil);
     const next = free.find((a) => !this.live.has(this.key(chat.id, a.id))) || free[0];
     if (!this.store.settings.autoHandoff || !next) {
-      this.push(chat, { role: 'system', level: 'limit', text: `${this.name(job.id)} ran out of usage${when}.${next ? '' : ' No other agent is free to continue.'}`, offer: next ? { task: job.task, from: job.id } : undefined });
+      this.push(chat, { role: 'system', agentId: job.id, level: 'limit', text: `${this.name(job.id)} ran out of usage${when}.${next ? '' : ' No other agent is free to continue.'}`, offer: next ? { task: job.task, from: job.id } : undefined });
       return;
     }
-    this.push(chat, { role: 'system', level: 'limit', text: `${this.name(job.id)} ran out of usage${when}. ${next.name} is continuing.` });
+    this.push(chat, { role: 'system', agentId: next.id, level: 'limit', text: `${this.name(job.id)} ran out of usage${when}. ${next.name} is continuing.` });
     this.enqueue(chat, { id: next.id, task: job.task, round: job.round, from: job.id, tried });
   }
   continueWith(chatId, messageId, agentId) {
     const chat = this.chat(chatId), m = chat.messages.find((x) => x.id === messageId);
     if (!m || m.role !== 'agent' || !this.usable().some((a) => a.id === agentId)) throw new Error('That agent is not available');
     if (agentId === m.agentId) {
-      this.push(chat, { role: 'system', text: `${this.name(agentId)} is continuing.` });
+      this.push(chat, { role: 'system', agentId, text: `${this.name(agentId)} is continuing.` });
       this.enqueue(chat, { id: agentId, task: `Continue this task from where you stopped, and finish with as few steps as you can:\n\n${m.task}`, round: randomUUID(), tried: [], spend: true });
       return;
     }
-    this.push(chat, { role: 'system', text: `${this.name(agentId)} is continuing ${this.name(m.agentId)}'s task.` });
+    this.push(chat, { role: 'system', agentId, text: `${this.name(agentId)} is continuing ${this.name(m.agentId)}'s task.` });
     this.enqueue(chat, { id: agentId, task: m.task, round: randomUUID(), from: m.status === 'limit' ? m.agentId : undefined, tried: [m.agentId] });
+  }
+  // The user answers a question an agent asked in its box. Agents paused for it pick up where they stopped.
+  answer(chatId, messageId, text) {
+    const chat = this.chat(chatId), m = chat.messages.find((x) => x.id === messageId), q = m?.question;
+    text = String(text || '').trim();
+    if (!q) throw new Error('That question is no longer there');
+    if (q.answer) throw new Error('That question was already answered');
+    if (!text) throw new Error('Write an answer first');
+    if (!this.usable().some((a) => a.id === m.agentId)) throw new Error(`${this.name(m.agentId)} is not ready. Open Settings to turn it on or sign in.`);
+    Object.assign(q, { answer: text, answeredAt: Date.now() });
+    this.touch(chat, m);
+    const round = randomUUID();
+    this.push(chat, { role: 'user', text, targets: [m.agentId], round, answers: m.id });
+    this.enqueue(chat, { id: m.agentId, task: `The user answered your question.\n\nYou asked: ${q.text}\n\nThey answered: ${text}\n\nContinue your task with this.`, round, tried: [] });
+    for (const x of chat.messages) if (x.pausedFor === q.id && x.status === 'paused' && !x.resumed && !this.live.has(this.key(chat.id, x.agentId))) { x.resumed = true; this.continueWith(chat.id, x.id, x.agentId); }
+    this.emit('chats', this.listChats());
   }
   filesTouched(chat, turn, paths) {
     for (const raw of paths) {
@@ -315,7 +337,7 @@ export class Orchestrator {
       if (!turn.files.has(p)) { turn.files.add(p); turn.msg.files.push(p); }
       for (const o of this.live.values()) if (o !== turn && o.chatId === chat.id && (o.files.has(p) || o.claims.has(p)) && !turn[`w:${p}`]) {
         turn[`w:${p}`] = true;
-        this.push(chat, { role: 'system', level: 'warn', text: `${this.name(turn.agentId)} and ${this.name(o.agentId)} are both working on ${p}. Check the result.` });
+        this.push(chat, { role: 'system', agentId: turn.agentId, level: 'warn', text: `${this.name(turn.agentId)} and ${this.name(o.agentId)} are both working on ${p}. Check the result.` });
       }
     }
   }
@@ -359,7 +381,7 @@ export class Orchestrator {
   async callTool({ chatId, agentId }, name, a) {
     const chat = this.chat(chatId), turn = this.live.get(this.key(chatId, agentId));
     if (!turn) throw new Error('Your turn is over');
-    const out = name.startsWith('team_') ? this.team(chat, agentId, turn, name, a) : await this.web(chat, agentId, turn, name, a);
+    const out = name.startsWith('team_') || name === 'ask_user' ? this.team(chat, agentId, turn, name, a) : await this.web(chat, agentId, turn, name, a);
     // Deliver teammates' notes with whatever the agent was doing.
     const st = chat.agents[agentId];
     const notes = chat.messages.filter((m) => m.note && m.agentId !== agentId && m.ts >= turn.msg.ts && !st.seen.includes(m.id));
@@ -385,6 +407,18 @@ export class Orchestrator {
         if (taken.length) throw new Error(`Already claimed: ${taken.join(', ')}. Nothing was claimed. Work on something else or post a note.`);
         files.forEach((f) => turn.claims.add(f));
         return `Claimed ${files.join(', ') || 'nothing'}.`;
+      }
+      case 'ask_user': {
+        const text = String(a.question || '').trim().slice(0, 4000);
+        if (!text) throw new Error('Write the question');
+        if (turn.msg.question && !turn.msg.question.answer) throw new Error('You already asked a question this turn. End your turn; the answer comes as your next message.');
+        const q = { id: randomUUID(), text, pauseOthers: a.pause_others === true, at: Date.now() };
+        turn.msg.question = q;
+        this.touch(chat, turn.msg);
+        const paused = [];
+        if (q.pauseOthers) for (const t of mates) if (!t.abort.signal.aborted) { t.paused = `Paused until you answer ${this.name(agentId)}'s question.`; t.pausedFor = q.id; t.abort.abort(); paused.push(this.name(t.agentId)); }
+        this.emit('question', { chatId: chat.id, agentId, question: text });
+        return `Your question is in your box in the chat.${paused.length ? ` Paused until the user answers: ${paused.join(', ')}.` : ''} End your turn now with one short line. The user's answer will come as your next message.`;
       }
       case 'team_release': (files.length ? files : [...turn.claims]).forEach((f) => turn.claims.delete(f)); return 'Released.';
       default: throw new Error(`Unknown tool ${name}`);

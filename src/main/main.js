@@ -23,6 +23,7 @@ let win, store, orch, browser, mcp, quotaTimer;
 const emit = (ch, data) => {
   if (!win || win.isDestroyed()) return;
   win.webContents.send('event', { ch, data });
+  if (ch === 'question') notify(`${orch.name(data.agentId)} has a question`, data.question, data.chatId);
   if (ch === 'approval') notify(`${orch.name(data.agentId)} needs your approval`, data.title, data.chatId);
   if (ch === 'turn-end') notify(`${orch.name(data.agentId)} ${{ done: 'finished', limit: 'ran out of usage', paused: 'was paused' }[data.status] || 'stopped'}`, orch.chat(data.chatId).title, data.chatId);
 };
@@ -70,13 +71,14 @@ const api = {
   init: async () => { const agents = orch.agents(); orch.refreshAgents(); return { agents, chats: orch.listChats(), settings: store.settings, browser: browser.state(), version: app.getVersion(), home: app.getPath('home') }; },
   'chat:open': (id) => ({ chat: orch.chat(id), approvals: orch.pendingApprovals(id) }),
   'chat:new': async () => { const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'], message: 'Choose the folder your agents will work in' }); return r.canceled ? null : orch.createChat({ cwd: r.filePaths[0] }); },
-  'chat:update': (id, p) => orch.updateChat(id, { title: p?.title, mode: p?.mode }),
+  'chat:update': (id, p) => orch.updateChat(id, { title: p?.title, mode: p?.mode, pinned: p?.pinned, archived: p?.archived, group: p?.group }),
   'chat:folder': async (id) => { const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] }); return r.canceled ? null : orch.updateChat(id, { cwd: r.filePaths[0] }); },
   'chat:delete': async (id) => { const r = await dialog.showMessageBox(win, { type: 'warning', message: 'Delete this chat?', detail: 'The chat is removed from CopyCLI. Files in the folder are not touched.', buttons: ['Delete', 'Cancel'], defaultId: 1, cancelId: 1 }); if (r.response) return false; orch.deleteChat(id); return true; },
   send: (id, text, agents) => orch.send(id, String(text), agents),
   stop: (id, agent) => orch.stop(id, agent),
   continue: (id, msg, agent) => orch.continueWith(id, msg, agent),
   approve: (id, d) => orch.resolveApproval(id, d),
+  answer: (chat, msg, text) => orch.answer(chat, msg, text),
   'agents:refresh': () => { forgetEnv(); return orch.refreshAgents(); },
   'agents:set': (id, p) => {
     const s = store.settings;
