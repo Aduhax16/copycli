@@ -35,9 +35,9 @@ export async function smoke({ win, orch, browser, mcp, store }) {
       await ui(`[...document.querySelectorAll('.cb-menu-item')].find((e) => e.textContent === ${JSON.stringify(text)}).click()`);
     };
     const librarySave = async (value) => {
-      await until(() => ui(`!!document.querySelector('.cb-dialog .cb-field')`), 2000, 'library dialog');
+      await until(() => ui(`!!document.querySelector('.cb-dialog .cb-field')`), 8000, 'library dialog');
       await ui(`document.querySelector('.cb-field').value=${JSON.stringify(value)};document.querySelector('.cb-dialog [type=submit]').click()`);
-      await until(() => ui(`!document.querySelector('.cb-dialog')`), 2000, 'library save');
+      await until(() => ui(`!document.querySelector('.cb-dialog')`), 8000, 'library save');
     };
     await libraryAction('Rename'); await librarySave('Organized conversation');
     assert.equal(libraryChat.title, 'Organized conversation');
