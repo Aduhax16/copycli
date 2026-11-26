@@ -9,7 +9,7 @@ One chat for all your coding agents. Claude Code, Codex, Antigravity and other a
 - **Continue when one runs out.** If an agent hits its usage limit mid-task, the next one gets the conversation, the unfinished work and the task, and carries on. Automatic, or by hand with "Continue with…".
 - **Work together.** `@claude write the HTML @codex write the CSS @gemini test it` gives each its own task, at the same time, in one chat. `@all` asks everyone.
 - **Organize conversations.** Use the sidebar’s ⋯ menu (or right-click) to rename, pin, move chats into named groups, archive and restore them. Search names, folders and groups with ⌘K. Names and organization survive restarting the app.
-- **One box per agent.** Each agent keeps its own box in the chat; a new reply replaces the last one there, and arrows go back to earlier ones. An agent can ask you something in its box, and pause the others until you answer when their work depends on it.
+- **Find each agent fast.** Buttons at the right of the chat take you to each agent's latest message, with an arrow when it is above or below. An agent can ask you something in its message, and pause the others until you answer when their work depends on it.
 - **Know about each other.** Each agent is told what the others said and did since it last spoke. While working they can check on teammates, leave notes and claim files. CopyCLI warns when two edit the same file.
 - **Share a browser.** A built-in browser that you see and every connected agent can drive: open, read, click, type, scroll, screenshot, console. It asks you per site, and refuses to type into password, code and card fields.
 - **Choose models.** Pick each agent's model and effort under the message box or in Settings.

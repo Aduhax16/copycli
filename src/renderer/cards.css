@@ -1,0 +1,33 @@
+/* Questions in an agent's card, and the buttons that jump to each agent's latest message. */
+.question { margin: 14px 0 0; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--warn) 6%, var(--card)); font-size: 12px; line-height: 1.6; }
+.question.answered { border-color: var(--line); background: var(--subtle); }
+.question-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 11px; font-weight: 600; }
+.question-mark { width: 17px; height: 17px; display: grid; place-items: center; border-radius: 50%; background: var(--warn); color: var(--card); font-size: 11px; font-weight: 700; }
+.question.answered .question-mark { background: var(--dim); }
+.question-hold { padding: 1px 7px; border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line)); border-radius: 99px; color: var(--warn); font-size: 9.5px; font-weight: 500; }
+.question-text { margin-top: 8px; }
+.question-text > :first-child { margin-top: 0; } .question-text > :last-child { margin-bottom: 0; }
+.question-form { display: flex; align-items: flex-end; gap: 8px; margin-top: 10px; }
+.question-form textarea { flex: 1; min-height: 36px; max-height: 200px; resize: none; padding: 8px 10px; border: 1px solid var(--strong-line); border-radius: 8px; background: var(--bg); font-size: 12px; line-height: 1.5; }
+.question-form button { min-height: 36px; padding: 6px 12px; font-size: 11px; }
+.question-answer { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; }
+.question-answer .dim { display: block; margin-bottom: 2px; font-size: 10px; }
+
+#main { position: relative; container: main / inline-size; }
+#jump { position: absolute; z-index: 3; top: 70px; right: 14px; display: flex; flex-direction: column; gap: 4px; padding: 5px; border: 1px solid var(--line); border-radius: 11px; background: color-mix(in srgb, var(--card) 92%, transparent); box-shadow: var(--shadow); backdrop-filter: blur(10px); }
+.jump-item { width: 100%; justify-content: flex-start; gap: 8px; min-height: 30px; padding: 4px 9px; border: 0; background: transparent; color: var(--dim); font-size: 11px; }
+.jump-item:hover { background: var(--hover); color: var(--text); }
+.jump-name { flex: 1; text-align: left; white-space: nowrap; }
+.jump-short { display: none; width: 16px; font-size: 10.5px; font-weight: 600; color: var(--text); }
+.jump-where { width: 10px; color: var(--text); font-size: 11px; text-align: center; }
+#main:has(#jump:not([hidden])) #log { padding-right: 150px; }
+.agent.flash { animation: flash 1.2s ease-out; }
+@keyframes flash { from { border-color: var(--text); box-shadow: 0 0 0 3px color-mix(in srgb, var(--text) 18%, transparent); } }
+/* Narrow: dots only. */
+@container main (max-width: 760px) {
+  .jump-name { display: none; }
+  .jump-short { display: block; }
+  .jump-item { padding: 4px 7px; gap: 4px; }
+  #main:has(#jump:not([hidden])) #log { padding-right: 84px; }
+}
+@media (prefers-reduced-motion: reduce) { .agent.flash { animation: none; } }

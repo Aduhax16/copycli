@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="settings.css">
 <link rel="stylesheet" href="agent-status.css">
-<link rel="stylesheet" href="lanes.css">
+<link rel="stylesheet" href="cards.css">
 <link rel="stylesheet" href="chat-sidebar.css">
 </head>
 <body>
@@ -24,6 +24,7 @@
 <main id="main">
   <header id="top"><input id="title" aria-label="Chat title" spellcheck="false"><button id="folder" class="quiet" title="Change folder"></button><span class="grow"></span><div id="agent-status" class="agent-status" role="status" aria-live="polite" aria-label="Agent status" hidden></div><button id="browser-btn" class="quiet" title="Show or hide the browser (⌘B)" aria-expanded="false" aria-controls="web"><span data-icon="panel"></span>Browser</button></header>
   <section id="log" aria-live="polite"></section>
+  <nav id="jump" aria-label="Go to an agent's latest message" hidden></nav>
   <section id="approvals" aria-label="Approvals"></section>
   <form id="composer">
     <textarea id="input" rows="1" placeholder="What would you like to build? Use @ to mention an agent." aria-label="Message your agents"></textarea>

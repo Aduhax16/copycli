@@ -1,8 +1,7 @@
 import { remainingPercent, quotaTooltip } from '../shared/usage.js';
 import { markdown } from './markdown.js';
 import { createSettings } from './settings.js';
-import { createAgentStatus } from './agent-status.js';
-import { createLanes } from './lanes.js';
+import { createAgentStatus, collectStatuses, STATUS_META } from './agent-status.js';
 import { createChatSidebar } from './chat-sidebar.js';
 const $ = (id) => document.getElementById(id);
 const h = (tag, props = {}, ...kids) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(props)) { if (v === undefined || v === null || v === false) continue; if (k.startsWith('on')) e[k] = v; else if (k === 'class') e.className = v; else if (k === 'c') e.style.setProperty('--c', v); else if (k in e && k !== 'list') e[k] = v; else e.setAttribute(k, v); } e.append(...kids.flat().filter((x) => x !== null && x !== undefined && x !== false)); return e; };
@@ -71,26 +70,26 @@ async function open(id) {
   chat = r.chat; approvals = r.approvals;
   localStorage.last = id;
   drawChat(); drawChats();
-  $('log').scrollTop = 0;
+  $('log').scrollTop = 1e9;
   $('input').focus();
 }
 async function newChat() { const c = await call('chat:new'); if (c) open(c.id); }
 
 // ---- chat ----
-const lanesRoot = h('div', { class: 'lanes-wrap' });
-const lanes = createLanes({ root: lanesRoot, h, agent, ready: () => ready(), dot, markdown, go, call, sendKey: () => settings.sendKey });
+const cards = new Map();
 const agentStatus = createAgentStatus({
   root: $('agent-status'),
   h,
   agent,
   dot,
-  onSelect: (id) => lanes.reveal(id),
+  onSelect: (id) => jumpTo(id),
 });
 function drawChat() {
+  cards.clear();
   for (const x of ['title', 'folder', 'composer', 'composer-hint']) $(x).hidden = !chat;
   composerHint();
   if (!chat) {
-    agentStatus.render(null);
+    agentStatus.render(null); drawJump();
     const n = ready();
     $('log').replaceChildren(h('div', { class: 'empty' },
       h('div', { class: 'welcome-mark' }, brandLogo()),
@@ -102,17 +101,115 @@ function drawChat() {
     return;
   }
   $('title').value = chat.title; $('folder').replaceChildren(icon('folder'), h('span', { class: 'folder-name' }, nice(chat.cwd))); $('folder').title = `Change folder · ${chat.cwd}`; $('mode').value = chat.mode;
-  lanes.render(chat);
-  $('log').replaceChildren(lanesRoot);
-  if (!chat.messages.length) $('log').replaceChildren(h('div', { class: 'empty' },
+  $('log').replaceChildren();
+  chat.messages.forEach(place);
+  if (!chat.messages.length) $('log').append(h('div', { class: 'empty' },
     h('div', { class: 'welcome-mark' }, brandLogo()), h('div', { class: 'eyebrow' }, 'Your next idea starts here'),
     h('h1', {}, 'What are we building?'), h('p', {}, 'Pick your agents below. Give them one goal or a task each — they’ll work together in this folder.'),
     h('div', { class: 'starter-grid' },
       starter('Build something', 'Turn an idea into working code', 'code', 'Help me build '),
       starter('Explore this project', 'Understand the code and structure', 'search', 'Explore this project and explain its structure and how to run it.'))));
-  drawTargets(); drawApprovals(); agentStatus.render(chat);
+  drawTargets(); drawApprovals(); agentStatus.render(chat); drawJump();
 }
+function place(m) {
+  $('log').querySelector('.empty')?.remove();
+  const old = cards.get(m.id);
+  const keep = old && new Set([...old.querySelectorAll('details[open]')].map((d) => d.dataset.id));
+  const n = m.role === 'user' ? userCard(m) : m.role === 'system' ? sysCard(m) : agentCard(m, keep);
+  cards.set(m.id, n);
+  if (old) {
+    // Streaming redraws the card; a half-written answer keeps its text and cursor.
+    const f = old.contains(document.activeElement) && document.activeElement.dataset.q ? document.activeElement : null;
+    old.replaceWith(n);
+    const again = f && n.querySelector(`[data-q="${f.dataset.q}"]`);
+    if (again) { again.focus({ preventScroll: true }); again.setSelectionRange(f.selectionStart, f.selectionEnd); }
+    return;
+  }
+  if (m.role === 'agent' && !m.note && m.round) {
+    const last = $('log').lastElementChild;
+    let r = [...$('log').querySelectorAll('.round')].find((x) => x.dataset.round === m.round);
+    // Later work in the same round (a handoff) starts a new row.
+    if (!r || (r !== last && last?.classList.contains('limit'))) { r = h('div', { class: 'round' }); r.dataset.round = m.round; $('log').querySelectorAll('.round').forEach((x) => { if (x.dataset.round === m.round) x.dataset.round += '-done'; }); $('log').append(r); }
+    r.append(n);
+  } else $('log').append(n);
+}
+const userCard = (m) => h('div', { class: 'user' }, h('div', { class: 'to' }, `To ${m.targets.map((t) => agent(t).name).join(', ')}`), h('div', { class: 'bubble' }, m.text));
+const sysCard = (m) => h('div', { class: `sys ${m.level || ''}` }, m.text);
+const tok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n || 0));
+const spend = (m) => { const u = m.usage; const bits = []; if (u) bits.push(`${tok(u.fresh)} new`, u.cached ? `${tok(u.cached)} reused` : '', `${tok(u.output)} written`, u.calls ? `${u.calls} calls` : ''); if (m.spent) bits.push(`${m.spent}% of limit`); return bits.filter(Boolean).join(' · '); };
 const span = (min) => (min >= 10080 ? 'week' : min >= 60 ? `${Math.round(min / 60)} h` : `${min} min`);
+const STATE = { running: 'Working', paused: 'Paused', limit: 'Out of usage', error: 'Stopped', cancelled: 'Stopped by you' };
+function agentCard(m, keep = new Set()) {
+  const a = agent(m.agentId), live = m.status === 'running';
+  const others = ready().filter((x) => x.id !== m.agentId);
+  const body = h('div', { class: 'body' });
+  for (const p of m.parts) {
+    if (p.type === 'text') body.append(markdown(p.text));
+    else {
+      const d = h('details', { class: 'tool', open: keep.has(p.id) }, h('summary', {}, h('span', { class: `mark ${p.status}` }, p.status === 'done' ? '✓' : p.status === 'error' ? '✕' : '…'), h('b', {}, p.name.replace(/^mcp__copycli__/, '')), p.detail ? h('code', {}, p.detail.split('\n')[0]) : null));
+      d.dataset.id = p.id;
+      const full = [p.detail?.includes('\n') || p.detail?.length > 80 ? p.detail : '', p.output].filter(Boolean).join('\n\n');
+      if (full) d.append(h('pre', {}, full));
+      body.append(d);
+    }
+  }
+  if (live && !m.parts.length) body.append(h('span', { class: 'dim' }, 'Starting…'));
+  if (m.error) body.append(h('p', { class: `err ${m.status}` }, m.error));
+  if (m.question) body.append(questionBox(m));
+  const more = h('select', { 'aria-label': 'Continue with another agent', onchange: (e) => { if (e.target.value) go('continue', chat.id, m.id, e.target.value); e.target.value = ''; } }, h('option', { value: '' }, 'Continue with…'), others.map((o) => h('option', { value: o.id }, o.name)));
+  return h('article', { class: `agent${m.note ? ' note' : ''}` },
+    h('header', {}, dot(m.agentId, live), a.name, h('span', { class: `state ${m.status}` }, m.note ? 'Note to the team' : STATE[m.status] || ''), h('span', { class: 'grow' }), live ? h('button', { class: 'quiet', onclick: () => go('stop', chat.id, m.agentId) }, 'Stop') : null, m.status === 'paused' ? h('button', { onclick: () => go('continue', chat.id, m.id, m.agentId) }, 'Continue') : null, live ? null : !m.note && others.length && m.status !== 'done' ? more : null),
+    body, m.files?.length ? h('div', { class: 'files' }, `Changed ${m.files.join(', ')}`) : null, spend(m) ? h('div', { class: 'files spend', title: 'Tokens. New: read for the first time. Reused: read again from cache, at a lower cost. Written: the answer, including thinking. Each company counts tokens its own way.' }, spend(m)) : null);
+}
+
+
+// A question the agent asked, answered right in its card.
+const drafts = new Map();
+function questionBox(m) {
+  const q = m.question, a = agent(m.agentId);
+  const box = h('section', { class: `question${q.answer ? ' answered' : ''}`, 'aria-label': `${a.name}'s question` },
+    h('div', { class: 'question-head' }, h('span', { class: 'question-mark', 'aria-hidden': 'true' }, '?'), q.answer ? 'Question' : `${a.name} is asking you`, q.pauseOthers && !q.answer ? h('span', { class: 'question-hold' }, 'Others wait for your answer') : null),
+    h('div', { class: 'question-text' }, markdown(q.text)));
+  if (q.answer) { box.append(h('div', { class: 'question-answer' }, h('span', { class: 'dim' }, 'You answered'), h('div', {}, q.answer))); return box; }
+  const input = h('textarea', { rows: 2, 'data-q': q.id, 'aria-label': `Answer ${a.name}`, placeholder: `Answer ${a.name}…`, value: drafts.get(q.id) || '',
+    oninput: (e) => { drafts.set(q.id, e.target.value); e.target.style.height = 'auto'; e.target.style.height = `${e.target.scrollHeight}px`; },
+    onkeydown: (e) => { if (e.isComposing || e.key !== 'Enter') return; if (settings.sendKey === 'mod' ? e.metaKey || e.ctrlKey : !e.shiftKey) { e.preventDefault(); e.target.form.requestSubmit(); } } });
+  box.append(h('form', { class: 'question-form', onsubmit: async (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text) return input.focus();
+    try { await call('answer', chat.id, m.id, text); drafts.delete(q.id); } catch {}
+  } }, input, h('button', { type: 'submit', class: 'primary' }, 'Answer')));
+  return box;
+}
+
+// ---- jump to each agent ----
+// Buttons at the right of the chat that take you to each agent's latest message, and show where it is.
+function jumpTo(id) {
+  const n = cards.get(id), log = $('log');
+  if (!n) return;
+  n.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: n.offsetHeight > log.clientHeight ? 'end' : 'start' });
+  n.classList.remove('flash'); void n.offsetWidth; n.classList.add('flash');
+}
+function drawJump() {
+  const items = chat ? collectStatuses(chat.messages) : [];
+  $('jump').hidden = !items.length;
+  $('jump').replaceChildren(...items.map((it) => {
+    const a = agent(it.agentId), label = (STATUS_META[it.status] || STATUS_META.done).label;
+    return h('button', { type: 'button', class: 'jump-item', 'data-agent': it.agentId, 'data-msg': it.messageId, title: `Go to ${a.name}'s latest message · ${label}`, 'aria-label': `Go to ${a.name}'s latest message, ${label}`, onclick: () => jumpTo(it.messageId) },
+      dot(it.agentId, it.status === 'running'), h('span', { class: 'jump-name' }, a.name), h('span', { class: 'jump-short', 'aria-hidden': 'true' }, a.name.slice(0, 2)), h('span', { class: 'jump-where', 'aria-hidden': 'true' }));
+  }));
+  whereAre();
+}
+// Arrows say whether each agent's message is above or below what you see.
+function whereAre() {
+  const box = $('log').getBoundingClientRect();
+  for (const b of $('jump').children) {
+    const r = cards.get(b.dataset.msg)?.getBoundingClientRect();
+    b.querySelector('.jump-where').textContent = !r ? '' : r.bottom < box.top + 8 ? '↑' : r.top > box.bottom - 8 ? '↓' : '';
+  }
+}
+$('log').addEventListener('scroll', () => requestAnimationFrame(whereAre), { passive: true });
 
 // ---- composer ----
 function drawTargets() {
@@ -213,11 +310,12 @@ window.deck.on((ch, d) => {
   if (ch === 'agents') { agents = d; if (chat) { drawTargets(); agentStatus.render(chat); } else drawChat(); prefs.refresh(); drawWeb(); }
   if (ch === 'chats') { chats = d; const c = chats.find((x) => x.id === chat?.id); if (c) { Object.assign(chat, { title: c.title, pinned: c.pinned, archived: c.archived, group: c.group }); if (document.activeElement !== $('title')) $('title').value = c.title; } drawChats(); }
   if (ch === 'message' && d.chatId === chat?.id) {
+    const log = $('log'), atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 90;
     const i = chat.messages.findIndex((m) => m.id === d.message.id);
     if (i < 0) chat.messages.push(d.message); else chat.messages[i] = d.message;
-    // Each agent keeps its own box; nothing scrolls under the user.
-    if (!$('log').contains(lanesRoot)) { lanes.render(chat); $('log').replaceChildren(lanesRoot); } else lanes.update(d.message);
-    agentStatus.render(chat);
+    place(d.message);
+    agentStatus.render(chat); drawJump();
+    if (atEnd || d.message.role === 'user') log.scrollTop = 1e9;
   }
   if (ch === 'usage') { const a = agents.find((x) => x.id === d.agentId); if (a) { a.usage = d.usage; a.usageDetails = d.usageDetails || d.usage; a.usageUpdatedAt = d.usageUpdatedAt; if (chat) drawTargets(); prefs.refresh(); } }
   if (ch === 'approval') { approvals.push(d); drawApprovals(); if (d.chatId !== chat?.id) toast(`${agent(d.agentId).name} needs your approval in another chat`); }

@@ -157,10 +157,14 @@ export async function smoke({ win, orch, browser, mcp, store }) {
       await ui(`document.getElementById('browser-btn').click()`);
       await sleep(900);
       await shot('multi');
-      // One box per agent.
-      assert.deepEqual(await ui(`[...document.querySelectorAll('.lane')].map((e) => e.dataset.agent)`), ['claude', 'codex', 'antigravity']);
-      assert.match(await ui(`document.querySelector('.lane[data-agent=claude] .lane-prompt').innerText`), /Build a landing page/);
-      assert.match(await ui(`document.querySelector('.lane[data-agent=codex] .lane-notices').innerText`), /ran out of usage/);
+      assert.equal(await ui(`document.querySelectorAll('.round .agent').length`), 3);
+      // Buttons at the right go to each agent's latest message.
+      await until(() => ui(`[...document.querySelectorAll('#jump .jump-item')].map((e) => e.dataset.agent).join()`).then((v) => v === 'claude,codex,antigravity'), 2000, 'jump buttons');
+      assert.equal(await ui(`document.getElementById('jump').hidden`), false);
+      await ui(`document.getElementById('log').scrollTop = 0`);
+      await ui(`document.querySelector('#jump .jump-item[data-agent=antigravity]').click()`);
+      await until(() => ui(`(() => { const r = [...document.querySelectorAll('.round .agent')].find((e) => e.querySelector('header').textContent.startsWith('Antigravity')).getBoundingClientRect(), l = document.getElementById('log').getBoundingClientRect(); return r.top < l.bottom && r.bottom > l.top; })()`), 3000, 'jumped to antigravity');
+      assert.equal(await ui(`document.querySelector('.agent.flash header').textContent.startsWith('Antigravity')`), true, 'the card it jumps to is highlighted');
       assert.ok(await ui(`(() => { const s = document.getElementById('send').getBoundingClientRect(), c = document.getElementById('composer').getBoundingClientRect(); return c.right - s.right < 24; })()`), 'Send stays at the right edge next to the browser');
       // Status strip shows mixed outcomes and updates the existing turn in place.
       const statuses = () => ui(`Object.fromEntries([...document.querySelectorAll('#agent-status .as-pill')].map((e) => [e.dataset.agent, e.dataset.status]))`);
@@ -180,52 +184,35 @@ export async function smoke({ win, orch, browser, mcp, store }) {
       assert.match(await ui(`document.querySelector('.as-pill[data-agent="codex"]').getAttribute('aria-label')`), /Codex: Working/);
       for (let i = 0; i < 6; i++) add({ role: 'agent', agentId: 'claude', note: true, status: 'done', files: [], parts: [{ type: 'text', text: 'A note for the team' }] });
       await sleep(300);
-      assert.equal(await ui(`document.querySelectorAll('.lane[data-agent=claude] .lane-note').length`), 6, 'notes stay in their agent\'s box');
-      assert.equal(await ui(`document.querySelectorAll('.lane').length`), 3);
+      assert.ok(await ui(`[...document.querySelectorAll('.agent.note')].every((e) => e.offsetHeight > 40)`), 'notes keep their height');
       assert.equal((await statuses()).claude, 'limit', 'team notes do not mark an agent done');
       assert.equal(await ui(`document.querySelectorAll('.body img').length + (window.pwned ? 1 : 0)`), 0);
       assert.equal(await ui(`document.querySelectorAll('.ask').length`), 1);
       await ui(`[...document.querySelectorAll('.ask button')].find((b) => b.textContent === 'Deny').click()`);
       await until(() => !orch.approvals.size, 2000, 'deny');
-      // A new turn replaces the old one in its box; the arrows go back to it. The page does not move.
-      await ui(`document.getElementById('log').scrollTop = 40`);
-      const top = await ui(`document.getElementById('log').scrollTop`);
-      const round2 = 'r2';
-      add({ role: 'user', text: 'Now add a footer', targets: ['claude'], round: round2 });
-      const second = add({ role: 'agent', agentId: 'claude', round: round2, status: 'done', task: 'x', files: [], parts: [{ type: 'text', text: 'Footer added.' }] });
-      await until(() => ui(`document.querySelector('.lane[data-agent=claude] .lane-count')?.textContent === '2 / 2'`), 2000, 'second turn');
-      const claudeBox = () => ui(`document.querySelector('.lane[data-agent=claude]').innerText`);
-      assert.match(await claudeBox(), /Footer added/);
-      assert.doesNotMatch(await claudeBox(), /started the hero/);
-      assert.equal(await ui(`document.querySelectorAll('.lane').length`), 3);
-      assert.equal(await ui(`document.getElementById('log').scrollTop`), top);
-      await ui(`document.querySelector('[data-k="prev-claude"]').click()`);
-      assert.match(await claudeBox(), /started the hero/);
-      assert.match(await ui(`document.querySelector('.lane[data-agent=claude] .lane-count').textContent`), /1 \/ 2/);
-      // While looking back, newer replies do not pull the box forward.
-      second.parts[0].text = 'Footer added and tested.'; orch.touch(c, second);
-      await sleep(150);
-      assert.match(await claudeBox(), /started the hero/);
-      await ui(`document.querySelector('[data-k="next-claude"]').click()`);
-      assert.match(await claudeBox(), /Footer added and tested/);
-      // A question is answered in the asking agent's box.
+      // A question is answered in the asking agent's card.
+      add({ role: 'user', text: 'Now add a footer', targets: ['claude'], round: 'r2' });
+      const second = add({ role: 'agent', agentId: 'claude', round: 'r2', status: 'done', task: 'x', files: [], parts: [{ type: 'text', text: 'Footer added.' }] });
       second.question = { id: 'q1', text: 'Blue or red?', pauseOthers: true, at: Date.now() };
       orch.touch(c, second);
-      await until(() => ui(`!!document.querySelector('.lane[data-agent=claude] .lane-q textarea')`), 2000, 'question');
-      assert.match(await claudeBox(), /Others wait for your answer/);
+      await until(() => ui(`!!document.querySelector('.agent .question textarea')`), 2000, 'question');
+      const asking = () => ui(`document.querySelector('.agent .question').innerText`);
+      assert.match(await asking(), /Claude is asking you[\s\S]*Others wait for your answer[\s\S]*Blue or red\?/);
       await shot('question');
       const answered = [], realAnswer = orch.answer;
       orch.answer = (chatId, msgId, text) => { answered.push([chatId, msgId, text]); second.question.answer = text; orch.touch(c, second); };
-      await ui(`(() => { const t = document.querySelector('.lane-q textarea'); t.focus(); t.value = 'Bl'; t.dispatchEvent(new Event('input')); })()`);
-      // Streaming in the box keeps a half-written answer and its focus.
+      await ui(`(() => { const t = document.querySelector('.question textarea'); t.focus(); t.value = 'Bl'; t.dispatchEvent(new Event('input')); })()`);
+      // Streaming into the card keeps a half-written answer and its focus.
       orch.touch(c, second);
       await sleep(150);
       assert.equal(await ui(`document.activeElement.dataset.q + ':' + document.activeElement.value`), 'q1:Bl');
       await ui(`(() => { const t = document.activeElement; t.value = 'Blue'; t.dispatchEvent(new Event('input')); t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
       await until(() => answered.length === 1, 2000, 'answer sent');
       assert.deepEqual(answered[0], [c.id, second.id, 'Blue']);
-      await until(async () => /You answered\s*Blue/.test(await claudeBox()), 2000, 'answer shown');
+      await until(async () => /You answered\s*Blue/.test(await asking()), 2000, 'answer shown');
       orch.answer = realAnswer;
+      // The jump button follows Claude's newest message.
+      await until(() => ui(`document.querySelector('#jump .jump-item[data-agent=claude]')?.dataset.msg === ${JSON.stringify(second.id)}`), 2000, 'jump follows newest');
       // Mentions: the menu offers each agent under its short name.
       if (orch.usable().some((a) => a.id === 'antigravity')) {
         await ui(`(() => { const i = document.getElementById('input'); i.focus(); i.value = '@gem'; i.setSelectionRange(4, 4); i.dispatchEvent(new Event('input')); })()`);
@@ -243,7 +230,7 @@ export async function smoke({ win, orch, browser, mcp, store }) {
       assert.deepEqual(await statuses(), {});
       orch.emit('open-chat', c.id);
       await until(async () => (await statuses()).claude === 'done', 2000, 'restored chat status');
-      assert.equal(await ui(`document.querySelectorAll('.lane').length`), 3, 'boxes come back with the chat');
+      assert.equal(await ui(`document.querySelectorAll('#jump .jump-item').length`), 3, 'jump buttons come back with the chat');
       // Remaining quota is shown for all three providers, not just Codex.
       const quotaReset = Date.now() / 1000 + 3600;
       for (const [id, usedPercent] of [['claude', 27], ['codex', 70], ['antigravity', 4]]) orch.recordUsage(id, [{ usedPercent, resetsAt: quotaReset, minutes: 300 }]);
